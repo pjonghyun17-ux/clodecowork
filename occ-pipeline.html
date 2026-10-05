@@ -282,15 +282,11 @@ function estSec(t){return Math.round(String(t||'').length/CPM*60);}
 const STAGES=[
   {id:'script',title:'원고 작성',desc:'차시 구조를 직접 짜고, 씬마다 핵심 내용을 적어 대본만 AI로 채웁니다.'},
   {id:'storyboard',title:'스토리보드 구성',desc:'화면 디자인과 씬별 레이아웃·이미지를 정합니다. 이 그림이 영상 화면이자 PPT가 됩니다.'},
-  {id:'visual',title:'비주얼 트랙',desc:'제작 방식을 고릅니다.',isModeStage:true},
   {id:'audio',title:'오디오 (AI 성우)',desc:'씬별 대본을 음성으로 변환하고 슬라이드 타이밍에 맞춥니다.'},
+  {id:'edit',title:'영상 편집',desc:'음성 길이를 보며 장면마다 캐릭터(2D·3D·강사 영상·AI 가상 강사)·화면·몸짓·전환을 정하고, AI 클립을 만듭니다.'},
   {id:'render',title:'영상 합성 / 출력',desc:'장(약 5분)마다 mp4와 자막을 만들고, 차시 화면 자료를 PPT로 내보냅니다.'}
 ];
 const STATUS_LABEL={todo:'시작 전',doing:'진행중',done:'완료'};
-const VISUAL_MODES=[
-  {id:'ai-character',title:'AI 캐릭터 내레이션형',sub:'PPT식 화면 + AI 캐릭터가 설명하는 영상'},
-  {id:'instructor-ppt',title:'실강사 촬영용 PPT',sub:'전자칠판·태블릿 촬영용 슬라이드만 제작'}
-];
 const CAPS=[
   {id:'text',label:'텍스트 생성',hint:'원고 작성',providers:{
     api:{name:'외부 API',fields:[
@@ -1598,6 +1594,8 @@ function buildClipGraph(w,opts){
 }
 const rail=document.getElementById('rail'),main=document.getElementById('main');
 
+// 단계 진행 상태 (예전 '비주얼 트랙' 상태는 '영상 편집'이 이어받음)
+function stageSt(id){const ss=project.stageStatus||{};return ss[id]||(id==='edit'?ss.visual:null)||'todo';}
 function renderRail(){
   rail.querySelectorAll('.stage').forEach(e=>e.remove());
   const ov=document.createElement('div');
@@ -1610,9 +1608,9 @@ function renderRail(){
   STAGES.forEach(function(st,i){
     const el=document.createElement('div');
     el.className='stage'+(st.id===activeStageId?' active':'');
-    el.dataset.status=project.stageStatus[st.id]||'todo';
+    el.dataset.status=stageSt(st.id);
     el.innerHTML='<div class="stage-num">'+(i+1)+'</div><div><div class="stage-title">'+esc(st.title)+
-      '</div><div class="stage-status">'+STATUS_LABEL[project.stageStatus[st.id]||'todo']+
+      '</div><div class="stage-status">'+STATUS_LABEL[stageSt(st.id)]+
       '</div></div><div class="stage-connector"></div>';
     el.addEventListener('click',function(){if(busy)return;activeStageId=st.id;renderRail();renderMain();});
     rail.appendChild(el);
@@ -1628,16 +1626,15 @@ function renderMain(){
   head.className='panel-head';
   head.innerHTML='<div><h2>'+esc(st.title)+'</h2><p>'+esc(st.desc)+'</p></div>'+
     '<select class="statusSel" id="statusSel">'+Object.keys(STATUS_LABEL).map(k=>
-      '<option value="'+k+'"'+((project.stageStatus[st.id]||'todo')===k?' selected':'')+'>'+STATUS_LABEL[k]+'</option>').join('')+'</select>';
+      '<option value="'+k+'"'+(stageSt(st.id)===k?' selected':'')+'>'+STATUS_LABEL[k]+'</option>').join('')+'</select>';
   main.appendChild(head);
   document.getElementById('statusSel').addEventListener('change',function(e){
     project.stageStatus[st.id]=e.target.value;persist();renderRail();});
   if(st.id==='script')return renderScriptStage();
-  if(st.id==='visual'){renderModeToggle();return renderVisualStage();}
+  if(st.id==='edit')return renderEditStage();
   if(st.id==='audio')return renderAudioStage();
   if(st.id==='storyboard')return renderStoryboardStage();
   if(st.id==='render')return renderRenderStage();
-  if(st.isModeStage)renderModeToggle();
   renderPlaceholder(st);
 }
 
@@ -1659,18 +1656,162 @@ function renderPlaceholder(st){
   main.appendChild(sum);
 }
 
-function renderModeToggle(){
-  const w=document.createElement('div');w.className='mode-toggle';
-  VISUAL_MODES.forEach(function(m){
-    const b=document.createElement('button');
-    b.className='mode-btn'+(project.visualMode===m.id?' selected':'');
-    b.innerHTML='<strong>'+esc(m.title)+'</strong><span>'+esc(m.sub)+'</span>';
-    b.addEventListener('click',function(){project.visualMode=m.id;persist();renderMain();});
-    w.appendChild(b);});
-  main.appendChild(w);
+/* ══════════ 4단계: 영상 편집 ══════════
+   음성까지 만든 뒤, 영상에 나오는 순서대로 장면을 보며 장면마다 캐릭터(2D·3D·강사 영상·AI 가상 강사)·화면(평면/스튜디오)·
+   움직임·몸짓·전환을 정합니다. 캐릭터 자료(리그·입모양 이미지·3D 모델·가상 강사 얼굴)는 2단계 캐릭터 카드에서 준비합니다.
+   AI 클립(이미지→영상) 만들기는 이 단계 아래쪽에 있습니다. */
+function editScenes(){
+  syncParts();
+  const o=[];
+  activeSpecial(project.parts.opening).forEach((s,i)=>o.push({s:s,ui:-1,si:i,no:'도입 '+(i+1),grp:'도입',special:true}));
+  project.units.forEach((u,ui)=>u.scenes.forEach((s,si)=>o.push({u:u,s:s,ui:ui,si:si,no:(ui+1)+'-'+(si+1),grp:(ui+1)+'장 · '+(u.title||'(제목 없음)')})));
+  activeSpecial(project.parts.closing).forEach((s,i)=>o.push({s:s,ui:-1,si:i,no:'마무리 '+(i+1),grp:'마무리',special:true}));
+  return o;
+}
+function sceneSec(s){return s.audioSec||s.durationSec||estSec(s.narration)||0;}
+function editSelect(attr,opts,cur){
+  return '<select '+attr+' style="width:100%;font-size:12px;padding:5px;">'+opts.map(o=>'<option value="'+o[0]+'"'+(cur===o[0]?' selected':'')+'>'+esc(o[1])+'</option>').join('')+'</select>';
+}
+function renderEditStage(){
+  if(talkStop)talkStop();
+  const d=courseDesign(),list=editScenes();
+  if(!project.units.some(u=>u.scenes.length)){
+    const c=document.createElement('div');c.className='card dashed';
+    c.innerHTML='<h3 style="margin:0 0 8px;font-size:14px;">씬이 없습니다</h3><p class="note">1단계에서 목차와 대본을 먼저 만드세요.</p>';
+    main.appendChild(c);return;
+  }
+  // ── 요약: 길이 · 음성 · 캐릭터 자료 준비 상태
+  const c=d.char||{},sec=list.reduce((a,x)=>a+sceneSec(x.s),0);
+  const noAud=list.filter(x=>!x.s.audioOut&&(x.s.narration||'').trim()).length;
+  const ready=[['rig',!!(c.rig&&c.rig.layers),'2D 리그'],['sprite',!!(c.imgs&&c.imgs.closed),'2D 입모양'],['glb',!!c.glb,'3D 모델'],['avatar',!!(c.pv&&c.pv.portrait),'가상 강사 얼굴']];
+  const sum=document.createElement('div');sum.className='engbar';
+  sum.innerHTML='<span class="lbl">장면</span><span class="val">'+list.length+'개 · '+fmtDur(sec)+'</span>'+
+    (noAud?'<span class="msg fail" style="font-size:12px;">음성 없는 장면 '+noAud+'개 — 3단계에서 만들면 길이가 맞춰집니다</span>':'<span class="msg ok" style="font-size:12px;">음성 준비됨</span>')+
+    '<span style="flex:1"></span><span class="lbl">과정 기본 캐릭터</span><span class="val">'+esc(CHAR_MODE_LABEL[courseCharMode(d)])+'</span>'+
+    '<span class="lbl">캐릭터 자료</span>'+ready.map(r=>'<span class="msg'+(r[1]?' ok':'')+'" style="font-size:12px;" title="2단계 캐릭터 카드에서 준비">'+(r[1]?'✓ ':'✗ ')+r[2]+'</span>').join('');
+  main.appendChild(sum);
+  // ── 미리보기 (음성과 함께 말하는 모습)
+  const pc=document.createElement('div');pc.className='card open';
+  pc.innerHTML='<div class="card-head" style="cursor:default;"><h3>미리보기</h3><span class="sub" data-p="t">장면의 ▶ 를 누르면 음성과 함께 움직입니다</span></div>'+
+    '<div class="card-body"><canvas width="960" height="540" data-p="cv" style="width:100%;max-width:720px;border-radius:8px;display:block;background:var(--bg);"></canvas>'+
+    '<div class="row-actions" style="margin-top:8px;"><button class="btn small" data-p="stop" style="display:none;">■ 멈춤</button><span class="msg" data-p="msg"></span></div></div>';
+  main.appendChild(pc);
+  const pcv=pc.querySelector('[data-p="cv"]'),pmsg=pc.querySelector('[data-p="msg"]'),pstop=pc.querySelector('[data-p="stop"]');
+  pstop.addEventListener('click',()=>{if(talkStop)talkStop();});
+  async function play(x){
+    if(talkStop)talkStop();
+    pc.querySelector('[data-p="t"]').textContent=x.no+' · '+(x.s.title||'');
+    pmsg.className='msg';pmsg.textContent='';
+    pc.scrollIntoView({behavior:'smooth',block:'start'});
+    if(x.special){await paintSpecialThumb(pcv,x.s,d);pmsg.textContent='도입·마무리 화면은 정지 그림만 보여 줍니다';return;}
+    await paintScene(pcv,x.ui,x.si,true);
+    pstop.style.display='';
+    try{await talkPreview(pcv,x,()=>{pstop.style.display='none';});}
+    catch(e){pstop.style.display='none';pmsg.className='msg fail';pmsg.textContent=e.message;}
+  }
+  // ── 모든 장면에 한 번에
+  const bulk=document.createElement('div');bulk.className='toolbar';
+  const cmOpts=[['','과정 기본 ('+CHAR_MODE_LABEL[courseCharMode(d)]+')']].concat(['rig','sprite','glb','video','avatar','none'].map(k=>[k,CHAR_MODE_LABEL[k]]));
+  const trOpts=[['','과정 기본 ('+TRANS_LABEL[d.fade?(d.trans||'fade'):'none']+')']].concat(Object.keys(TRANS_LABEL).map(k=>[k,TRANS_LABEL[k]]));
+  bulk.innerHTML='<span class="meta">모든 장면을</span>'+
+    '<span style="width:170px;">'+editSelect('data-b="cm"',cmOpts,'')+'</span><button class="btn small" data-b="cmGo">캐릭터로</button>'+
+    '<span style="width:150px;margin-left:10px;">'+editSelect('data-b="tr"',trOpts,'')+'</span><button class="btn small" data-b="trGo">전환으로</button>';
+  main.appendChild(bulk);
+  bulk.querySelector('[data-b="cmGo"]').addEventListener('click',function(){
+    const v=bulk.querySelector('[data-b="cm"]').value;
+    if(!confirm('모든 장면('+list.length+'개)의 캐릭터를 "'+(v?CHAR_MODE_LABEL[v]:'과정 기본')+'"(으)로 바꿉니다.'))return;
+    list.forEach(x=>setSceneCharMode(x.s,v));persist();renderScriptStageKeepScroll();});
+  bulk.querySelector('[data-b="trGo"]').addEventListener('click',function(){
+    const v=bulk.querySelector('[data-b="tr"]').value;
+    list.forEach(x=>{if(v)x.s.trans=v;else delete x.s.trans;});persist();renderScriptStageKeepScroll();});
+  // ── 장면 목록: 보이는 썸네일부터 그림
+  const io=('IntersectionObserver' in window)?new IntersectionObserver(function(es){es.forEach(e=>{if(e.isIntersecting){io.unobserve(e.target);e.target.__paint&&e.target.__paint();}});},{rootMargin:'300px'}):null;
+  const lookOpts=[['','과정 기본 환경'],['neo','네오'],['substation','변전소 현장'],['control','관제실'],['lecture','강의실']];
+  function row(x){
+    const s=x.s,m=sceneCharMode(d,s),kinds=studioKinds(d)||[];
+    const autoStudio=!!(s.kind&&kinds.indexOf(s.kind)>=0);
+    const studio=s.studio==='on'||(s.studio!=='off'&&autoStudio);
+    const el=document.createElement('div');
+    el.style.cssText='display:grid;grid-template-columns:minmax(150px,210px) 1fr;gap:12px;padding:11px 14px;border-top:1px solid var(--border);';
+    const warn=[];
+    if(!charModeReady(d,m,s))warn.push(m==='video'?'강사 영상을 올리세요':m==='avatar'?'가상 강사 영상을 만드세요':(CHAR_MODE_LABEL[m]+' 자료가 없어 캐릭터 없이 나갑니다 (2단계 캐릭터 카드)'));
+    if(studio&&(m==='video'||m==='avatar'))warn.push('스튜디오 장면에서는 강사 영상이 나오지 않습니다');
+    el.innerHTML='<canvas width="320" height="180" style="width:100%;border-radius:6px;cursor:pointer;display:block;background:var(--surface-2);" title="미리보기"></canvas>'+
+      '<div style="min-width:0;">'+
+        '<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px;">'+
+          '<span class="scene-no">'+esc(x.no)+'</span><span style="flex:1;font-size:13px;line-height:1.45;word-break:keep-all;overflow-wrap:anywhere;">'+esc(s.title||SPECIAL_TITLE[s.kind]||'')+'</span>'+
+          '<span class="mono" style="font-size:11.5px;color:var(--text-dim);">'+fmtDur(sceneSec(s))+'</span>'+
+          ((s.narration||'').trim()&&!s.audioOut?'<span class="msg fail" style="font-size:11px;">음성 없음</span>':'')+'</div>'+
+        '<div class="form-grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;">'+
+          '<div class="field"><label>캐릭터</label>'+charModeSelect(d,s,'data-e="cm" style="width:100%;font-size:12px;padding:5px;"')+'</div>'+
+          '<div class="field"><label>화면</label>'+editSelect('data-e="st"',[['auto','자동 → '+(autoStudio?'스튜디오':'평면')],['on','스튜디오 장면'],['off','평면 화면']],s.studio||'auto')+'</div>'+
+          (s.studio==='on'?'<div class="field"><label>스튜디오 환경</label>'+editSelect('data-e="lk"',lookOpts,s.studioLook||'')+'</div>':'')+
+          (x.special?'':'<div class="field"><label>움직임</label>'+editSelect('data-e="mo"',Object.keys(MOTIONS).map(k=>[k,MOTIONS[k].label]),s.motion||'kenburns')+'</div>')+
+          (charGestOn(d,s)||studio?'<div class="field"><label>몸짓</label>'+editSelect('data-e="ge"',Object.keys(GEST_LABEL).map(k=>[k,GEST_LABEL[k]]),s.gesture||'auto')+'</div>':'')+
+          '<div class="field"><label>들어올 때 전환</label>'+editSelect('data-e="tr"',trOpts,s.trans||'')+'</div>'+
+        '</div>'+
+        '<div class="row-actions" style="margin-top:8px;">'+
+          '<button class="btn small" data-e="play">▶ 미리보기</button>'+
+          (m==='video'?'<button class="btn small" data-e="pvPick">'+(s.presenterVid?'강사 영상 바꾸기':'강사 영상 올리기')+'</button><input type="file" hidden accept="video/*" data-e="pvFile">'+
+            (s.presenterVid?'<span class="msg ok">'+esc(s.presenterVid.name||'')+' · '+fmtDur(s.presenterVid.dur||0)+'</span>':''):'')+
+          (m==='avatar'?'<button class="btn small" data-e="avGen">'+(s.avatarOut&&!avatarStale(s)?'가상 강사 다시 만들기':'가상 강사 만들기')+'</button>'+
+            '<span class="msg'+(s.avatarOut&&!avatarStale(s)?' ok':'')+'" data-e="avMsg">'+(!s.audioOut?'음성 먼저':!s.avatarOut?'없음':avatarStale(s)?'음성이 바뀜':'준비됨')+'</span>':'')+
+          (warn.length?'<span class="msg fail" style="font-size:11.5px;">⚠ '+esc(warn.join(' · '))+'</span>':'')+
+        '</div></div>';
+    const cv=el.querySelector('canvas');
+    cv.__paint=function(){(x.special?paintSpecialThumb(cv,s,d):paintScene(cv,x.ui,x.si,false)).catch(function(){});};
+    if(io)io.observe(cv);else cv.__paint();
+    const again=function(){persist();const n=row(x);el.replaceWith(n);};
+    const q=k=>el.querySelector('[data-e="'+k+'"]');
+    cv.addEventListener('click',()=>play(x));q('play').addEventListener('click',()=>play(x));
+    q('cm').addEventListener('change',e=>{setSceneCharMode(s,e.target.value);again();});
+    q('st').addEventListener('change',e=>{const v=e.target.value;if(v==='auto')delete s.studio;else s.studio=v;if(s.studio!=='on')delete s.studioLook;again();});
+    if(q('lk'))q('lk').addEventListener('change',e=>{s.studioLook=e.target.value||undefined;persist();});
+    if(q('mo'))q('mo').addEventListener('change',e=>{s.motion=e.target.value;persist();renderScriptStageKeepScroll();});   // AI 클립 목록도 바뀜
+    if(q('ge'))q('ge').addEventListener('change',e=>{s.gesture=e.target.value;again();});
+    q('tr').addEventListener('change',e=>{if(e.target.value)s.trans=e.target.value;else delete s.trans;persist();});
+    if(q('pvPick')){const fi=q('pvFile');q('pvPick').addEventListener('click',()=>fi.click());
+      fi.addEventListener('change',async function(e){
+        const f=e.target.files&&e.target.files[0];e.target.value='';if(!f)return;
+        if(f.size>1024*1048576){alert('1GB 이하 영상만 올릴 수 있습니다.');return;}
+        try{const url=URL.createObjectURL(f);let dur=0;
+          try{const v=await openVideo(url);dur=v.duration||0;}finally{URL.revokeObjectURL(url);}
+          const id=uid('m');await Store.putBlob(id,f);
+          if(s.presenterVid)Store.delBlob(s.presenterVid.id).catch(()=>{});
+          s.presenterVid={id:id,name:f.name,size:f.size,dur:dur};s.presenterAspect=null;
+          if(presenterCfg(d).useAudio!==false&&dur>0)s.durationSec=Math.round(dur);
+          again();
+        }catch(err){alert('강사 영상을 저장하지 못했습니다: '+err.message);}});}
+    if(q('avGen'))q('avGen').addEventListener('click',async function(){
+      const msg=q('avMsg'),pv=presenterCfg(d);
+      if(!pv.portrait){msg.className='msg fail';msg.textContent='2단계 캐릭터 카드에서 가상 강사 얼굴을 먼저 고르세요';return;}
+      const w=getWorkflows('avatar').find(z=>z.id===pv.wf)||getWorkflows('avatar')[0];
+      if(!w){msg.className='msg fail';msg.textContent='가상 강사 워크플로우가 없습니다';return;}
+      setBusy(true);avatarCancel=false;
+      try{await generateAvatar(s,w,(sec,qq)=>{msg.className='msg';msg.textContent=sec+'초 '+(qq||'');});again();}
+      catch(err){msg.className='msg fail';msg.textContent=err.message;}
+      finally{setBusy(false);}
+    });
+    return el;
+  }
+  let box=null,grp=null;
+  list.forEach(function(x){
+    if(x.grp!==grp){
+      grp=x.grp;box=document.createElement('div');box.className='unit';
+      const gs=list.filter(y=>y.grp===grp).reduce((a,y)=>a+sceneSec(y.s),0);
+      box.innerHTML='<div class="unit-head"><span style="flex:1;font-weight:500;">'+esc(grp)+'</span><span class="unit-dur">'+fmtDur(gs)+'</span></div>';
+      main.appendChild(box);
+    }
+    box.appendChild(row(x));
+  });
+  // ── AI 클립 (예전 비주얼 트랙)
+  const h=document.createElement('div');h.className='panel-head';h.style.marginTop='28px';
+  h.innerHTML='<div><h2 style="font-size:16px;">AI 클립 만들기 (이미지 → 영상)</h2><p>움직임이 "AI 클립" 또는 "AI 클립 루프"인 장면의 짧은 영상을 ComfyUI로 만듭니다.</p></div>';
+  main.appendChild(h);
+  renderVisualStage();
 }
 
-/* ---------- 3단계: 비주얼 트랙 ---------- */
+/* ---------- 4단계 영상 편집: AI 클립 만들기 (예전 비주얼 트랙) ---------- */
 let clipCancel=false;
 
 function renderVisualStage(){
@@ -1718,7 +1859,7 @@ function renderVisualStage(){
     const c=document.createElement('div');
     c.className='card dashed';
     c.innerHTML='<h3 style="margin:0 0 8px;font-size:14px;">AI 클립으로 지정된 씬이 없습니다</h3>'+
-      '<p class="note">1단계에서 씬의 모션 타입을 "AI 클립" 또는 "AI 클립 루프"로 바꾸면 여기에 나타납니다. '+
+      '<p class="note">위 장면 목록에서 움직임을 "AI 클립" 또는 "AI 클립 루프"로 바꾸면 여기에 나타납니다. '+
       '켄번스 씬은 정지 이미지만 있으면 되므로 여기서 처리하지 않습니다.</p>';
     main.appendChild(c);
     return;
@@ -1860,7 +2001,7 @@ function renderClipCard(t,wf){
   return el;
 }
 
-/* ---------- 4단계: 오디오 (AI 성우) ---------- */
+/* ---------- 3단계: 오디오 (AI 성우) ---------- */
 let ttsCancel=false;
 let ttsLog=[];
 
@@ -3379,7 +3520,7 @@ function renderOverview(){
     '<p class="note">자료실 <b>'+course.refs.length+'건</b> ('+refChars.toLocaleString()+'자) · '+
     '발음 사전 <b>'+(course.dict||[]).length+'개 규칙</b> · '+
     '음성 '+esc([course.tts.ttsSpeaker||'워크플로우 화자',course.tts.ttsStyle||'','시드 '+course.tts.ttsSeed].filter(Boolean).join(' · '))+'</p>'+
-    '<p class="note" style="margin-top:6px;">자료실은 1단계 "참고자료"에서, 발음 사전과 음성 설정은 4단계에서 관리합니다. 어느 차시에서 고쳐도 과정 전체에 반영됩니다.</p>'+
+    '<p class="note" style="margin-top:6px;">자료실은 1단계 "참고자료"에서, 발음 사전과 음성 설정은 3단계(오디오)에서 관리합니다. 어느 차시에서 고쳐도 과정 전체에 반영됩니다.</p>'+
     '</div>';
   main.appendChild(sh);
 }
@@ -3766,7 +3907,7 @@ function drawLogo(ctx,img,W,s,d){
    아래쪽을 화면 바닥에 붙이고, 숨쉬기·말할 때 들썩임은 늘려 그리는 방식이라 바닥에 틈이 생기지 않습니다. */
 function charBoxFor(d,W,H,imgs){
   const c=d.char;
-  if(!c||!c.on||!imgs||!imgs.closed)return null;
+  if(!c||!imgs||!imgs.closed)return null;              // 켜짐 여부는 부르는 쪽(장면별 캐릭터)이 정함
   const im=imgs.closed,ar=(im.naturalWidth||im.width)/((im.naturalHeight||im.height)||1);
   const s=W/1920,h=H*(c.size||0.38),w=h*ar;
   return {x:W-40*s-w,y:H-h,w:w,h:h};
@@ -5044,7 +5185,6 @@ function makeRigMotion(rig){
 /* ══════════ 강사 화면: 녹화 강사 영상 · AI 가상 강사 ══════════
    씬마다 강사 영상(직접 녹화한 것 또는 가상 강사로 만든 것)을 오른쪽 아래에 합성합니다.
    녹색·파란 배경은 지우고(크로마키), 단색 배경이 아니면 둥근 상자로 넣을 수 있습니다. */
-function presenterOn(d){return !!(d.char&&d.char.on&&(d.char.mode==='video'||d.char.mode==='avatar'));}
 function presenterCfg(d){
   const c=d.char;
   if(!c.pv)c.pv={size:0.5,cropW:0.42,cropX:0.5,style:'key',sim:0.22,smooth:0.12,bar:true,useAudio:true};
@@ -5053,8 +5193,9 @@ function presenterCfg(d){
 function avatarStale(s){return !s.audioOut||!s.avatarOut||s.avatarSig!==s.audioOut.filename;}
 function presenterSource(s,d){
   if(!s)return null;
-  if(d.char.mode==='video'&&s.presenterVid)return {key:'b:'+s.presenterVid.id,blobId:s.presenterVid.id};
-  if(d.char.mode==='avatar'&&s.avatarOut&&!avatarStale(s))return {key:'c:'+s.avatarOut.filename,ref:s.avatarOut,parts:(s.avatarParts&&s.avatarParts.length>1)?s.avatarParts:null};
+  const m=sceneCharMode(d,s);
+  if(m==='video'&&s.presenterVid)return {key:'b:'+s.presenterVid.id,blobId:s.presenterVid.id};
+  if(m==='avatar'&&s.avatarOut&&!avatarStale(s))return {key:'c:'+s.avatarOut.filename,ref:s.avatarOut,parts:(s.avatarParts&&s.avatarParts.length>1)?s.avatarParts:null};
   return null;
 }
 /* 원본에서 잘라 쓸 영역: 가로 영상이면 가운데 일부, 세로·정사각 영상이면 전체 */
@@ -5357,7 +5498,7 @@ async function autoAvatarPipeline(say){
   const needTts=all.filter(x=>!x.s.audioOut);
   if(needTts.length){
     const tw=getWorkflows('tts').find(x=>x.id===cfg.activeTts)||getWorkflows('tts')[0];
-    if(!tw)throw new Error('음성 합성(TTS) 워크플로우가 없습니다 — 4단계 설정을 확인하세요');
+    if(!tw)throw new Error('음성 합성(TTS) 워크플로우가 없습니다 — 3단계(오디오) 설정을 확인하세요');
     for(let i=0;i<needTts.length;i++){
       if(avatarCancel)throw new Error('중단됨');
       await generateAudio(needTts[i],tw,{keepLoaded:true},(sec,q)=>say('음성 '+(i+1)+'/'+needTts.length+' · '+(needTts[i].s.title||'')+' · '+sec+'초 '+(q||'')));
@@ -5367,7 +5508,7 @@ async function autoAvatarPipeline(say){
   // 2) 음성 모델을 내리고 영상 모델에 GPU를 비워 줌
   say('GPU 비우는 중');await comfyUnloadAll();
   // 3) 씬별 말하는 영상
-  const todo=all.filter(x=>x.s.audioOut&&avatarStale(x.s));
+  const todo=all.filter(x=>x.s.audioOut&&avatarStale(x.s)&&sceneCharMode(courseDesign(),x.s)==='avatar');   // AI 가상 강사를 쓰는 씬만
   for(let i=0;i<todo.length;i++){
     if(avatarCancel)throw new Error('중단됨');
     await generateAvatar(todo[i].s,aw,(sec,q)=>say('가상 강사 '+(i+1)+'/'+todo.length+' · '+(todo[i].s.title||'')+' · '+sec+'초 '+(q||'')));
@@ -5406,7 +5547,7 @@ async function introKeyCandidates(pc,n,onTick){
 }
 async function introMakeVideo(pc,key,onTick){
   const l=getWorkflows('i2v');const w=l.find(x=>x.id===pc.introAiWf)||l[0];
-  if(!w)throw new Error('이미지→영상 워크플로우가 없습니다 — 설정 → 워크플로우에 등록하세요 (3단계 클립과 같은 것)');
+  if(!w)throw new Error('이미지→영상 워크플로우가 없습니다 — 설정 → 워크플로우에 등록하세요 (4단계 영상 편집의 AI 클립과 같은 것)');
   const st=INTRO_STYLES[pc.introAiStyle||'grid']||INTRO_STYLES.grid;
   const g=buildClipGraph(w,{image:(key.subfolder?key.subfolder+'/':'')+key.filename+' [output]',
     prompt:INTRO_CAMS[pc.introAiCam||'push']+', '+st.img+', smooth steady cinematic motion, no text',
@@ -6079,9 +6220,10 @@ const Studio={ok:false,
     this.r=r;this.sc=sc;this.W=W;this.H=H;this.ok=true;
     // 3D 모델 키아
     const ch=d.char||{};
-    if(d.kia3d==='glb'&&ch.glb&&ch.rig){
-      try{const rd=await rigData(d),blob=await Store.getBlob(ch.glb.id);
-        if(blob&&rd){this.glb=await buildGlbKia(T,blob,rd.rig,rd.imgs,{fix:ch.glbFix!==false,mode:ch.glbMode||'asis'});this.glb.root.traverse(o=>{if(o.isMesh)o.castShadow=true;});sc.add(this.glb.root);}}
+    if(ch.glb&&(d.kia3d==='glb'||this.wantGlb)){          // 과정 설정이 3D 모델이거나, 3D 모델을 고른 스튜디오 씬이 있을 때
+      try{const rd=ch.rig?await rigData(d).catch(()=>null):null,blob=await Store.getBlob(ch.glb.id);
+        if(blob){this.glb=await buildGlbKia(T,blob,rd?rd.rig:{},rd?rd.imgs:{},{fix:ch.glbFix!==false,mode:ch.glbMode||'asis'});this.glb.root.traverse(o=>{if(o.isMesh)o.castShadow=true;});sc.add(this.glb.root);
+          try{this.glb.update({armL:-48,armR:6,mouth:'closed'},null,0);}catch(e){sc.remove(this.glb.root);this.glb=null;throw e;}}}
       catch(e){this.glbErr=e.message;}
     }
   },
@@ -6097,18 +6239,15 @@ const Studio={ok:false,
     this.stex.needsUpdate=true;
     const px0=3.4,pz0=-1.6,px1=.8,pz1=S.SZ+.35,px=px0+(px1-px0)*kw,pz=pz0+(pz1-pz0)*kw;
     const op=1-Math.max(0,Math.min(1,(w-.42)/.2));
-    const three=this.glb||(this.d.kia3d==='on'&&o.rig&&typeof buildKia3D==='function'?(this.k3||(this.k3=(()=>{const k=buildKia3D(T,o.rig.rig,o.rig.imgs);this.sc.add(k.root);return k;})())):null);
-    if(three&&o.rig){
+    const pk=this.pickChar(o),three=pk&&pk.three;
+    if(three){
       this.kia.visible=false;
       const h0=-0.35,h1=Math.atan2(px1-px0,pz1-pz0),tr=Math.min(1,kw/0.15);
       three.root.position.set(px,0,pz);three.root.rotation.y=h0+(h1-h0)*(tr*tr*(3-2*tr));
       three.update(o.rig.pose,kw>0&&kw<1?kw*Math.PI*7:null,o.lt);three.setOpacity(op);
       this.shadow.visible=false;
-    }else if(o.rig){
-      const rg=o.rig.rig,sz=rg.size,b=rg.bounds||[0,0,sz[0],sz[1]];
-      if(this.rigCv.width!==sz[0]){this.rigCv.width=sz[0];this.rigCv.height=sz[1];}
-      const x=this.rigCv.getContext('2d');x.clearRect(0,0,sz[0],sz[1]);
-      drawRig(x,rg,o.rig.imgs,o.rig.pose,0,0,1,o.rig.flip,{x:0,y:0,w:sz[0],h:sz[1]});this.rtex.needsUpdate=true;
+    }else if(pk&&pk.kind){
+      const P=this.plate(o,pk.kind),sz=P.sz,b=P.b;
       const hh=2.3,sc2=hh/(b[3]-b[1]),pw=sz[0]*sc2,ph=sz[1]*sc2,hop=Math.abs(Math.sin(kw*Math.PI*4))*.14*(kw>0&&kw<1?1:0);
       this.kia.scale.set(pw,ph,1);this.kia.position.set(px,ph/2-(sz[1]-b[3])*sc2+hop,pz);this.kia.rotation.z=Math.sin(kw*Math.PI*4)*.06*(kw<1?1:0);
       this.kia.material.opacity=op;this.kia.visible=op>.01;
@@ -6117,7 +6256,35 @@ const Studio={ok:false,
     this.r.render(this.sc,this.cam);
     return this.r.domElement;
   },
-  dispose(){if(this.r){this.r.dispose();this.r.forceContextLoss&&this.r.forceContextLoss();}this.ok=false;this.r=null;this.glb=null;this.k3=null;}
+  dispose(){if(this.r){this.r.dispose();this.r.forceContextLoss&&this.r.forceContextLoss();}this.ok=false;this.r=null;this.glb=null;this.k3=null;},
+  // 이 프레임에 세울 캐릭터: 3D(모델·도형) 또는 2D 판(리그·입모양). 씬에서 고른 방식(o.rig.kind)이 먼저
+  pickChar(o){
+    const r=o.rig;if(!r)return null;
+    let kind=r.kind||(this.glb?'glb':(this.d.kia3d==='on'?'k3':'rig'));
+    if(kind==='glb'&&!this.glb)kind=r.rig?'rig':'sprite';                     // 모델을 못 읽었으면 2D 판으로
+    if(kind==='k3'&&!(r.rig&&typeof buildKia3D==='function'))kind='rig';
+    if(kind==='rig'&&!r.rig)kind='sprite';
+    if(kind==='sprite'&&!(r.sprite&&r.sprite.closed))kind=null;
+    const three=kind==='glb'?this.glb:kind==='k3'?(this.k3||(this.k3=(()=>{const k=buildKia3D(this.T,r.rig,r.imgs);this.sc.add(k.root);return k;})())):null;
+    [this.glb,this.k3].forEach(x=>{if(x&&x!==three)x.setOpacity(0);});   // 이번 씬에 안 쓰는 3D 캐릭터는 숨김
+    return {kind:kind,three:three};
+  },
+  // 2D 판에 캐릭터 그리기 (리그 또는 입모양 이미지) → 판 크기
+  plate(o,kind){
+    const r=o.rig;
+    if(kind==='rig'){
+      const rg=r.rig,sz=rg.size,b=rg.bounds||[0,0,sz[0],sz[1]];
+      if(this.rigCv.width!==sz[0]||this.rigCv.height!==sz[1]){this.rigCv.width=sz[0];this.rigCv.height=sz[1];}
+      const x=this.rigCv.getContext('2d');x.clearRect(0,0,sz[0],sz[1]);
+      drawRig(x,rg,r.imgs,r.pose,0,0,1,r.flip,{x:0,y:0,w:sz[0],h:sz[1]});this.rtex.needsUpdate=true;
+      return {sz:sz,b:b};
+    }
+    const im=r.sprite.closed,iw=im.naturalWidth||im.width,ih=im.naturalHeight||im.height,top=Math.round(ih*0.03);
+    if(this.rigCv.width!==iw||this.rigCv.height!==ih){this.rigCv.width=iw;this.rigCv.height=ih;}
+    const x=this.rigCv.getContext('2d');x.clearRect(0,0,iw,ih);
+    drawCharacter(x,{x:0,y:top,w:iw,h:ih-top},r.sprite,r.state||'closed',r.level||0,r.t||0,r.flip,1920);this.rtex.needsUpdate=true;
+    return {sz:[iw,ih],b:[0,0,iw,ih]};
+  }
 };
 
 /* ══════════ 네오 스튜디오 (시네마틱) ══════════
@@ -6339,9 +6506,10 @@ Object.assign(Studio,{
     this.grade.renderToScreen=true;comp.addPass(this.grade);
     this.comp=comp;this.r=r;this.sc=sc;this.W=W;this.H=H;this.ok=true;
     const ch=d.char||{};
-    if(d.kia3d==='glb'&&ch.glb&&ch.rig){
-      try{const rd=await rigData(d),blob=await Store.getBlob(ch.glb.id);
-        if(blob&&rd){this.glb=await buildGlbKia(T,blob,rd.rig,rd.imgs,{fix:ch.glbFix!==false,mode:ch.glbMode||'asis'});this.glb.root.traverse(o=>{if(o.isMesh){o.castShadow=true;if(o.material&&'envMapIntensity' in o.material)o.material.envMapIntensity=this.envI;}});sc.add(this.glb.root);}}
+    if(ch.glb&&(d.kia3d==='glb'||this.wantGlb)){
+      try{const rd=ch.rig?await rigData(d).catch(()=>null):null,blob=await Store.getBlob(ch.glb.id);
+        if(blob){this.glb=await buildGlbKia(T,blob,rd?rd.rig:{},rd?rd.imgs:{},{fix:ch.glbFix!==false,mode:ch.glbMode||'asis'});this.glb.root.traverse(o=>{if(o.isMesh){o.castShadow=true;if(o.material&&'envMapIntensity' in o.material)o.material.envMapIntensity=this.envI;}});sc.add(this.glb.root);
+          try{this.glb.update({armL:-48,armR:6,mouth:'closed'},null,0);}catch(e){sc.remove(this.glb.root);this.glb=null;throw e;}}}
       catch(e){this.glbErr=e.message;}
     }
   },
@@ -6373,16 +6541,13 @@ Object.assign(Studio,{
     this.beamMat.uniforms.uI.value=.09*fx;
     // 키아
     const px0=3.3,pz0=-1.3,px1=.8,pz1=S.SZ+.35,px=px0+(px1-px0)*kw,pz=pz0+(pz1-pz0)*kw,op=1-sm(.42,.62,w);
-    const three=this.glb||(this.d.kia3d==='on'&&o.rig&&typeof buildKia3D==='function'?(this.k3||(this.k3=(()=>{const k=buildKia3D(T,o.rig.rig,o.rig.imgs);this.sc.add(k.root);return k;})())):null);
-    if(three&&o.rig){
+    const pk=this.pickChar(o),three=pk&&pk.three;
+    if(three){
       this.kia.visible=false;const h0=-0.35,h1=Math.atan2(px1-px0,pz1-pz0),tr=Math.min(1,kw/0.15);
       three.root.position.set(px,0,pz);three.root.rotation.y=h0+(h1-h0)*(tr*tr*(3-2*tr));
       three.update(o.rig.pose,kw>0&&kw<1?kw*Math.PI*7:null,st);three.setOpacity(op);this.shadow.visible=false;
-    }else if(o.rig){
-      const rg=o.rig.rig,sz=rg.size,b=rg.bounds||[0,0,sz[0],sz[1]];
-      if(this.rigCv.width!==sz[0]){this.rigCv.width=sz[0];this.rigCv.height=sz[1];}
-      const x=this.rigCv.getContext('2d');x.clearRect(0,0,sz[0],sz[1]);
-      drawRig(x,rg,o.rig.imgs,o.rig.pose,0,0,1,o.rig.flip,{x:0,y:0,w:sz[0],h:sz[1]});this.rtex.needsUpdate=true;
+    }else if(pk&&pk.kind){
+      const P=this.plate(o,pk.kind),sz=P.sz,b=P.b;
       const hh=2.3,s2=hh/(b[3]-b[1]),pw=sz[0]*s2,ph=sz[1]*s2,hop=Math.abs(Math.sin(kw*Math.PI*4))*.14*(kw>0&&kw<1?1:0);
       this.kia.scale.set(pw,ph,1);this.kia.position.set(px,ph/2-(sz[1]-b[3])*s2+hop,pz);this.kia.rotation.z=Math.sin(kw*Math.PI*4)*.06*(kw<1?1:0);
       this.kia.material.opacity=op;this.kia.visible=op>.01;
@@ -6404,6 +6569,68 @@ Object.assign(Studio,{
   Studio.render=function(o){return this.neo?this.renderNeo(o):render0.call(this,o);};
   Studio.dispose=function(){if(this.comp){try{this.comp.renderTarget1.dispose();this.comp.renderTarget2.dispose();}catch(e){}this.comp=null;}return dispose0.call(this);};
 })();
+
+/* ══════════ 평면 화면 위 3D 캐릭터 ══════════
+   스튜디오가 아닌 장면에서도 3D 모델(GLB) 캐릭터를 오른쪽 아래에 세웁니다 (장면별 캐릭터 '3D 모델').
+   투명 배경으로 따로 그려 슬라이드 위에 얹고, 2D 리그와 같은 몸짓 값(설명·가리키기·손 흔들기…)으로 움직입니다. */
+function flat3dPlace(d,W,H){
+  const s=W/1920,h=Math.round(H*Math.min(0.62,((d.char&&d.char.size)||0.42)*1.12)),w=Math.round(h*0.72);
+  const x=Math.round(W-16*s-w),y=H-h;
+  // 글 배치가 피해 갈 자리: 몸이 있는 가운데 부분
+  return {x:x,y:y,w:w,h:h,box:{x:Math.round(x+w*0.14),y:Math.round(y+h*0.05),w:Math.round(w*0.72),h:Math.round(h*0.95)}};
+}
+function makeFlat3D(){
+  return {ok:false,r:null,k:null,place:null,
+    async init(d,W,H){
+      this.dispose();
+      const ch=d.char||{};
+      if(!ch.glb)throw new Error('3D 모델 파일(GLB)을 먼저 올리세요 — 2단계 화면 디자인 → 스튜디오 캐릭터');
+      const T=await loadThree(true),blob=await Store.getBlob(ch.glb.id);
+      if(!blob)throw new Error('저장된 3D 모델 파일을 찾지 못했습니다');
+      const rd=ch.rig?await rigData(d).catch(()=>null):null;
+      const k=await buildGlbKia(T,blob,rd?rd.rig:{},rd?rd.imgs:{},{fix:ch.glbFix!==false,mode:ch.glbMode||'asis'});
+      const pl=flat3dPlace(d,W,H);
+      const r=new T.WebGLRenderer({antialias:true,alpha:true,preserveDrawingBuffer:true,premultipliedAlpha:true});
+      r.setPixelRatio(1);r.setSize(pl.w,pl.h,false);r.outputEncoding=T.sRGBEncoding;
+      r.toneMapping=T.ACESFilmicToneMapping;r.toneMappingExposure=1.05;r.setClearColor(0x000000,0);
+      const sc=new T.Scene();
+      sc.environment=new T.PMREMGenerator(r).fromScene(new T.RoomEnvironment(),0.04).texture;
+      sc.add(new T.HemisphereLight(0xffffff,0x8090a0,.55));
+      const key=new T.DirectionalLight(0xfff3e6,1.25);key.position.set(3,6,6);sc.add(key);
+      const rim=new T.DirectionalLight(0xdfe9ff,.6);rim.position.set(-4,4,-5);sc.add(rim);
+      sc.add(k.root);k.root.rotation.y=-0.32;            // 슬라이드(왼쪽) 쪽으로 살짝 돌아섬
+      // 키 2.3 인 캐릭터가 발끝부터 머리 위까지 들어오도록
+      const cam=new T.PerspectiveCamera(24,pl.w/pl.h,.1,60),half=1.3,dist=half/Math.tan(T.MathUtils.degToRad(12));
+      cam.position.set(0,1.18,dist);cam.lookAt(0,1.18,0);
+      Object.assign(this,{T:T,r:r,sc:sc,cam:cam,k:k,place:pl,ok:true});
+      try{this.render({armL:-48,armR:6,mouth:'closed'},null,0);}catch(e){this.dispose();throw e;}   // 한 장 그려 봐서 안 되는 모델은 여기서 걸러냄
+    },
+    render(pose,walk,tm){
+      this.k.update(pose,walk,tm);this.k.setOpacity(1);
+      this.r.render(this.sc,this.cam);return this.r.domElement;
+    },
+    dispose(){if(this.r){this.r.dispose();this.r.forceContextLoss&&this.r.forceContextLoss();}this.r=null;this.k=null;this.ok=false;}
+  };
+}
+/* 스토리보드·영상 편집 미리보기용 3D 캐릭터 정지 그림 (모델당 한 번만 그려 둠) */
+const _glbStill={key:'',cv:null,p:null};
+function glbStill(d){
+  const c=d.char||{};if(!c.glb)return Promise.resolve(null);
+  const key=c.glb.id+'|'+(c.glbMode||'asis')+'|'+(c.size||0.42);
+  if(_glbStill.key===key)return _glbStill.p;
+  _glbStill.key=key;
+  _glbStill.p=(async function(){
+    const f=makeFlat3D();
+    try{
+      await f.init(d,1920,1080);
+      const pose={armL:8,armR:-6,head:0,headY:0,mouth:'closed',talk:true};
+      for(let i=0;i<4;i++)f.render(pose,null,i/30);
+      const cv=document.createElement('canvas');cv.width=f.place.w;cv.height=f.place.h;cv.getContext('2d').drawImage(f.r.domElement,0,0);
+      return cv;
+    }finally{f.dispose();}
+  })().catch(e=>{_glbStill.key='';return null;});
+  return _glbStill.p;
+}
 
 /* ══════════ 장(단원) 시간표 · 자막 ══════════ */
 const SEG_LEAD=0.35, SEG_TAIL=0.65, CHAPTER_SEC=3.0, END_HOLD=0.6, FADE_SEC=0.3;
@@ -7051,7 +7278,7 @@ function sfxEvents(tl,d){
     if(sg.kind==='chapter'){ev.push({t:sg.start,id:P.chap,v:.7});ev.push({t:sg.start+1.0,id:P.hit,v:.6});return;}
     if(sg.kind!=='scene'||!sg.scene||sg.scene.__video)return;
     const s=sg.scene;
-    if(i>0&&d.trans!=='none')ev.push({t:sg.start,id:P.trans,v:.5});
+    if(i>0&&segTrans(d,sg)!=='none')ev.push({t:sg.start,id:P.trans,v:.5});
     if(s.kind==='intro')ev.push({t:sg.start+0.2,id:P.intro,v:.5});
     if(s.kind==='quizA')ev.push({t:sg.start+0.3,id:P.quiz,v:.7});
     if(!s.kind){
@@ -7180,10 +7407,59 @@ async function charImages(d){
   _charCache={sig:sig,imgs:out};
   return out;
 }
-function charShown(d,sg){
-  if(!d.char||!d.char.on)return false;
-  if(sg.kind==='chapter')return !!d.char.chapter;
-  return !sg.scene.charHide;
+/* ══════════ 장면별 캐릭터 ══════════
+   씬마다 캐릭터 방식을 따로 정할 수 있습니다 (s.charMode). 비어 있으면 과정 기본(캐릭터 카드의 방식, 캐릭터가 꺼져 있으면 없음).
+   rig 2D 리그 · sprite 2D 입모양 · glb 3D 모델 · video 녹화 강사 · avatar AI 가상 강사 · none 없음 */
+const CHAR_MODE_LABEL={rig:'2D 리그',sprite:'2D 입모양',glb:'3D 모델',video:'녹화 강사',avatar:'AI 가상 강사',none:'없음'};
+function courseCharMode(d){const c=d.char||{};return c.on?(c.mode||'sprite'):'none';}
+function sceneCharMode(d,s){
+  if(s&&s.charMode&&CHAR_MODE_LABEL[s.charMode])return s.charMode;
+  if(s&&s.charHide)return 'none';                     // 예전 '캐릭터' 체크 해제
+  return courseCharMode(d);
+}
+// 장 표지는 과정 기본 캐릭터 (강사 영상은 씬마다 따로 있는 것이라 표지엔 나오지 않음)
+function segCharMode(d,sg){
+  if(sg.kind==='chapter'){const m=courseCharMode(d);return (d.char&&d.char.chapter&&m!=='video'&&m!=='avatar')?m:'none';}
+  return sceneCharMode(d,sg.scene);
+}
+// 그 방식에 필요한 자료가 준비됐는지 (안 됐으면 그 씬은 캐릭터 없이 나갑니다)
+function charModeReady(d,m,s){
+  const c=d.char||{};
+  if(m==='rig')return !!(c.rig&&c.rig.layers);
+  if(m==='sprite')return !!(c.imgs&&c.imgs.closed);
+  if(m==='glb')return !!c.glb;
+  if(m==='video')return !!(s&&s.presenterVid);
+  if(m==='avatar')return !!(s&&s.avatarOut&&!avatarStale(s));
+  return true;
+}
+function charShown(d,sg){return segCharMode(d,sg)!=='none';}
+// 씬 카드·영상 편집에서 쓰는 '캐릭터' 고르기 (빈 값 = 과정 기본)
+function charModeSelect(d,s,attr){
+  const cur=s.charMode||(s.charHide?'none':'');
+  return '<select '+attr+' title="이 장면의 캐릭터">'+
+    [['','과정 기본 ('+CHAR_MODE_LABEL[courseCharMode(d)]+')']].concat(['rig','sprite','glb','video','avatar','none'].map(k=>[k,CHAR_MODE_LABEL[k]]))
+      .map(o=>'<option value="'+o[0]+'"'+(cur===o[0]?' selected':'')+'>'+esc(o[1])+(o[0]&&!charModeReady(d,o[0],s)?' · 준비 안 됨':'')+'</option>').join('')+'</select>';
+}
+function setSceneCharMode(s,v){if(v&&CHAR_MODE_LABEL[v])s.charMode=v;else delete s.charMode;delete s.charHide;}
+// 몸짓을 고를 수 있는 씬: 2D 리그·3D 모델이거나 스튜디오 장면
+function charGestOn(d,s){const m=sceneCharMode(d,s);return m==='rig'||m==='glb'||s.studio==='on';}
+// 이 구간으로 넘어올 때의 전환: 씬에서 고른 전환이 먼저, 없으면 과정 설정 ('장면 전환 페이드'가 꺼져 있으면 바로 넘김)
+const TRANS_LABEL={fade:'페이드',push:'밀어내기',zoom:'확대 전환',wipe:'닦아내기 (사선)',blur:'흐림 전환',none:'바로 넘기기'};
+function segTrans(d,sg){
+  const s=sg&&sg.kind==='scene'?sg.scene:null;
+  if(s&&s.trans&&TRANS_LABEL[s.trans])return s.trans;
+  return d.fade?(d.trans||'fade'):'none';
+}
+/* 스튜디오 장면의 캐릭터: 씬에서 고른 방식이 있으면 그것(3D 모델 · 2D 리그 판 · 2D 입모양 판),
+   과정 기본이면 화면 디자인의 '스튜디오 캐릭터' 설정을 따름. 강사 영상은 무대에 세울 수 없어 그 씬은 캐릭터 없이 나감 */
+function studioCharKind(d,s){
+  const c=d.char||{};
+  if(s&&s.charMode){const m=s.charMode;return (m==='glb'||m==='rig'||m==='sprite')?m:null;}
+  if(s&&s.charHide)return null;
+  if(!c.on)return null;
+  if(d.kia3d==='glb')return 'glb';
+  if(d.kia3d==='on')return 'k3';
+  return (c.mode==='rig'||c.mode==='sprite'||c.mode==='glb')?c.mode:null;
 }
 
 function seekTo(v,t){
@@ -7434,7 +7710,7 @@ async function renderFileVideo(file,cb){
         }catch(e){warnings.push((s.kind==='intro'?'인트로':'아웃트로')+' 영상을 못 읽음 — '+e.message);}
       }
       const tag=pt.chap?(pt.chap+'-'+(i+1)):(pt.u.title+' '+(i+1));
-      if(d.char&&d.char.on&&d.char.mode==='video'&&s.presenterVid&&presenterCfg(d).useAudio!==false){
+      if(sceneCharMode(d,s)==='video'&&s.presenterVid&&presenterCfg(d).useAudio!==false){
         try{
           const b=await Store.getBlob(s.presenterVid.id);
           if(b){const buf=await actx.decodeAudioData(await b.arrayBuffer());pb.push(buf);pd.push(buf.duration);continue;}
@@ -7545,17 +7821,28 @@ async function renderFileVideo(file,cb){
   const prev=document.createElement('canvas');prev.width=W;prev.height=H;
   const pctx=prev.getContext('2d');
   const logo=await designLogo(d);
-  const useRig=!!(d.char&&d.char.on&&d.char.mode==='rig');
-  const rd=useRig?await rigData(d):null;
+  // 장면별 캐릭터: 구간마다 방식을 정해 두고, 쓰이는 방식의 자료만 불러옵니다
+  const segModes=tl.segs.map(sg=>segCharMode(d,sg));
+  const segKinds=tl.segs.map(sg=>sg.kind==='scene'?studioCharKind(d,sg.scene):null);   // 스튜디오 구간의 캐릭터
+  const uses=m=>tl.segs.some((sg,i)=>sg.studio?segKinds[i]===m:segModes[i]===m);
+  const rd=(uses('rig')||uses('k3')||uses('glb'))&&d.char&&d.char.rig?await rigData(d).catch(()=>null):null;
+  if(uses('rig')&&!rd)warnings.push('2D 리그 캐릭터를 쓰는 씬이 있지만 리그 파일이 없어 그 씬은 캐릭터 없이 나갑니다');
   const place=rd?rigPlace(d,W,H,rd.rig):null;
-  const cimgs=(d.char&&d.char.on&&(d.char.mode||'sprite')==='sprite')?await charImages(d):null;
-  const usePres=presenterOn(d),presState={};
-  let cbox=place?place.box:(cimgs?charBoxFor(d,W,H,cimgs):null);
-  const rigMove=rd?makeRigMotion(rd.rig):null;
+  const cimgs=uses('sprite')?await charImages(d).catch(()=>null):null;
+  if(uses('sprite')&&!(cimgs&&cimgs.closed))warnings.push('2D 입모양 캐릭터를 쓰는 씬이 있지만 캐릭터 이미지가 없어 그 씬은 캐릭터 없이 나갑니다');
+  const presState={};
+  const flat3d=makeFlat3D();
+  if(tl.segs.some((sg,i)=>!sg.studio&&segModes[i]==='glb')){   // 슬라이드 층만 뽑을 때도 자리(글 배치)는 필요
+    try{say('3D 캐릭터 준비 중…');await flat3d.init(d,W,H);}
+    catch(e){warnings.push('3D 모델 캐릭터를 쓰지 못해 그 씬은 캐릭터 없이 나갑니다 — '+e.message);}
+  }
+  let cbox=null;
+  const rigMove=makeRigMotion(rd?rd.rig:{});              // 3D 모델도 같은 몸짓 값으로 움직임
   let gest='present',lastCue=null;
   const nFrames=Math.ceil(total*fps);
   let studioT0=null,prevStudio=false,studioPrev=null;
   if(tl.segs.some(x=>x.studio)&&cb.layer!=='char'){
+    Studio.wantGlb=tl.segs.some((sg,i)=>sg.studio&&segKinds[i]==='glb');
     try{say('가상 스튜디오 준비 중…');await Studio.init(d,W,H);studioPrev=document.createElement('canvas');studioPrev.width=W;studioPrev.height=H;
       if(Studio.glbErr)warnings.push('3D 캐릭터 모델을 쓰지 못해 2D 판으로 나갑니다 — '+Studio.glbErr);}
     catch(e){warnings.push('가상 스튜디오를 쓰지 못해 평면으로 만듭니다 — '+e.message);tl.segs.forEach(x=>x.studio=false);}
@@ -7588,20 +7875,23 @@ async function renderFileVideo(file,cb){
     if(si!==curSeg){
       prevStudio=curSeg>=0&&!!tl.segs[curSeg].studio&&!!tl.segs[si].studio;
       if(prevStudio&&Studio.ok){studioPrev.getContext('2d').drawImage(Studio.slideCv,0,0);fadeFrom=tl.segs[si].start;}
-      else if(curSeg>=0&&d.fade&&(d.trans||'fade')!=='none'){pctx.drawImage(canvas,0,0);fadeFrom=tl.segs[si].start;}
+      else if(curSeg>=0&&segTrans(d,tl.segs[si])!=='none'){pctx.drawImage(canvas,0,0);fadeFrom=tl.segs[si].start;}
       curSeg=si;await enterSeg(si);
     }
-    const sg=tl.segs[si],lb=segLabels(sg);
-    let showC;
-    if(usePres){                                       // 강사 영상이 있는 씬만, 영상 비율에 맞춰 자리 잡기
+    const sg=tl.segs[si],lb=segLabels(sg),cm=segModes[si];
+    let showC;cbox=null;
+    if(cm==='video'||cm==='avatar'){                   // 강사 영상이 있는 씬만, 영상 비율에 맞춰 자리 잡기
       if(sg.pres===undefined){
         sg.pres=null;
         const src=sg.kind==='scene'?presenterSource(sg.scene,d):null;
         if(src){try{await PresVid.open(src);presState.keyColor=null;sg.pres={place:presenterPlace(d,W,H,PresVid.aspect(presenterCfg(d))),src:src};}
           catch(e){warnings.push((sg.scene.title||'씬')+' 강사 영상 — '+e.message);}}
       }
-      cbox=sg.pres?sg.pres.place.box:null;showC=!!cbox;
-    }else showC=!!cbox&&charShown(d,sg);
+      cbox=sg.pres?sg.pres.place.box:null;
+    }else if(cm==='rig'&&place)cbox=place.box;
+    else if(cm==='sprite'&&cimgs)cbox=charBoxFor(d,W,H,cimgs);
+    else if(cm==='glb'&&flat3d.ok)cbox=flat3d.place.box;
+    showC=!!cbox;
     const studioNow=!!(sg.studio&&Studio.ok);
     if(studioNow){showC=false;if(studioT0==null)studioT0=sg.start;
       const want=sg.scene&&sg.scene.studioLook?sg.scene.studioLook:(d.studioLook||'neo');
@@ -7685,13 +7975,13 @@ async function renderFileVideo(file,cb){
         anim:{lt:lt,times:sg.plan.times,noteT:sg.plan.noteT,talking:talking}});
     }
     if(fadeFrom>=0&&!studioNow&&cb.layer!=='char'){
-      const TS=(d.trans&&d.trans!=='fade')?0.65:FADE_SEC,a=1-(t-fadeFrom)/TS;
-      if(a>0)drawTransition(ctx,prev,canvas,W,H,d.trans||'fade',1-a);
+      const tr0=segTrans(d,sg),TS=tr0!=='fade'?0.65:FADE_SEC,a=1-(t-fadeFrom)/TS;
+      if(a>0)drawTransition(ctx,prev,canvas,W,H,tr0,1-a);
       else fadeFrom=-1;
     }
     if(d.grain&&cb.layer!=='char')drawGrain(ctx,W,H,f);
     const drawC=showC&&cb.layer!=='slides';
-    if(usePres&&drawC&&sg.pres){
+    if((cm==='video'||cm==='avatar')&&drawC&&sg.pres){
       const src=sg.pres.src;let local=t-sg.audioStart,cur=src;
       if(src.parts){                                   // 가상 강사가 구간별 영상이면 지금 시각의 구간으로
         let k=0;while(k<src.parts.length-1&&local>=src.parts[k+1].start)k++;
@@ -7700,7 +7990,7 @@ async function renderFileVideo(file,cb){
       if(PresVid.key!==cur.key){await PresVid.open(cur);}
       const v=await PresVid.frameAt(local);
       drawPresenter(ctx,W,H,d,v,sg.pres.place,presState);
-    }else if(!usePres&&drawC&&!(sg.scene&&sg.scene.__video)){
+    }else if(drawC&&(cm==='rig'||cm==='sprite'||cm==='glb')&&!(sg.scene&&sg.scene.__video)){
       let state='closed',level=0;
       if(sg.kind==='scene'){
         const pi=partIdx.get(sg.part),tr=tracks[pi][sg.index],ev=envs[pi][sg.index];
@@ -7712,7 +8002,7 @@ async function renderFileVideo(file,cb){
       let dx=0;
       if(sg.kind==='scene'&&sg.scene.kind==='intro')dx=(1-ez(t-sg.start,0.8,1.6))*(W-cbox.x);
       ctx.save();ctx.translate(dx,0);
-      if(rd){
+      if(cm==='rig'||cm==='glb'){
         const talking=sg.kind==='scene'&&t>=sg.audioStart&&t<sg.audioStart+sg.audioDur;
         if(sg.kind==='scene'){
           const cue=sg.cues.find(c=>t>=c.start&&t<c.end);
@@ -7720,8 +8010,9 @@ async function renderFileVideo(file,cb){
             gest=(sc.gesture&&sc.gesture!=='auto')?sc.gesture:gestureFor(cue.text,sc.kind);}
           if(!talking&&t>sg.audioStart+sg.audioDur+1.0)gest='rest';
         }else gest='present';
-        const pose=rigMove(t,1/fps,gest,level,talking);pose.mouth=state==='blink'?'closed':state;
-        drawRig(ctx,rd.rig,rd.imgs,pose,place.ox,place.oy,place.sc,d.char.flip,place.box);
+        const pose=rigMove(t,1/fps,gest,level,talking);pose.mouth=state==='blink'?'closed':state;pose.talk=talking;
+        if(cm==='rig')drawRig(ctx,rd.rig,rd.imgs,pose,place.ox,place.oy,place.sc,d.char.flip,place.box);
+        else{const P3=flat3d.place;ctx.drawImage(flat3d.render(pose,null,t),P3.x,P3.y,P3.w,P3.h);}
       }else{
         if(state==='closed'&&cimgs.blink&&isBlink(t))state='blink';
         drawCharacter(ctx,cbox,cimgs,state,level,t,d.char.flip,W);
@@ -7735,15 +8026,17 @@ async function renderFileVideo(file,cb){
         if(a>0&&prevStudio){sctx.save();sctx.globalAlpha=a;sctx.drawImage(studioPrev,0,0);sctx.restore();}
       }
       let rigO=null;
-      if(rd&&d.char&&d.char.on){
+      const kind=segKinds[si];
+      if(kind){
         const pi=partIdx.get(sg.part),tr=tracks[pi][sg.index],ev=envs[pi][sg.index];let state='closed',level=0;
         const talking=t>=sg.audioStart&&t<sg.audioStart+sg.audioDur;
         if(tr&&talking){const k=Math.floor((t-sg.audioStart)*fps);if(k>=0&&k<tr.length){state=tr[k];level=ev[k];}}
         const cue=sg.cues.find(c=>t>=c.start&&t<c.end);
-        if(cue&&cue!==lastCue){lastCue=cue;gest=gestureFor(cue.text,sg.scene.kind);}
+        if(cue&&cue!==lastCue){lastCue=cue;const sc=sg.scene;gest=(sc.gesture&&sc.gesture!=='auto')?sc.gesture:gestureFor(cue.text,sc.kind);}
         if(!talking)gest=(sg.walkStart!=null&&t>=sg.walkStart-0.3)?'rest':'present';
         const pose=rigMove(t,1/fps,gest,level,talking);pose.mouth=state==='blink'?'closed':state;pose.talk=talking;
-        rigO={rig:rd.rig,imgs:rd.imgs,pose:pose,flip:d.char.flip};
+        if(kind==='sprite'&&state==='closed'&&cimgs&&cimgs.blink&&isBlink(t))state='blink';
+        rigO={rig:rd?rd.rig:null,imgs:rd?rd.imgs:null,pose:pose,flip:d.char.flip,kind:kind,sprite:cimgs,state:state,level:level,t:t};
       }
       const walk=sg.walkStart!=null?Math.max(0,Math.min(1,(t-sg.walkStart)/sg.walkLen)):0;
       ctx.drawImage(Studio.render({lt:t-studioT0,walk:walk,rig:rigO}),0,0,W,H);
@@ -7768,7 +8061,7 @@ async function renderFileVideo(file,cb){
   if(clip){clip.frames.forEach(fr=>fr.close&&fr.close());clip=null;}
   Object.values(videos).forEach(mv=>{mv.v.removeAttribute('src');mv.v.load();URL.revokeObjectURL(mv.url);});
   say('마무리 중…');
-  await venc.flush();PresVid.close();if(Studio.ok)Studio.dispose();
+  await venc.flush();PresVid.close();if(Studio.ok)Studio.dispose();Studio.wantGlb=false;flat3d.dispose();
   if(encErr)throw encErr;
   muxer.finalize();
   venc.close();aenc.close();
@@ -8207,13 +8500,14 @@ async function paintScene(cv,ui,si,withSub){
   const W=cv.width,H=cv.height,ctx=cv.getContext('2d');
   if(!ctx)return;
   let sub=null;
-  const useRig=!!(d.char&&d.char.on&&d.char.mode==='rig');
-  const rd=useRig?await rigData(d).catch(()=>null):null;
-  const place=(rd&&!s.charHide)?rigPlace(d,W,H,rd.rig):null;
-  const imgs=(d.char&&d.char.on&&(d.char.mode||'sprite')==='sprite')?await charImages(d).catch(()=>null):null;
-  const still=presenterOn(d)?await presenterStill(d,s).catch(()=>null):null;
+  const cm=sceneCharMode(d,s);                           // 장면별 캐릭터
+  const rd=cm==='rig'?await rigData(d).catch(()=>null):null;
+  const place=rd?rigPlace(d,W,H,rd.rig):null;
+  const imgs=cm==='sprite'?await charImages(d).catch(()=>null):null;
+  const still=(cm==='video'||cm==='avatar')?await presenterStill(d,s).catch(()=>null):null;
+  const g3=cm==='glb'?await glbStill(d):null,p3=g3?flat3dPlace(d,W,H):null;
   const pplace=still?presenterPlace(d,W,H,still.aspect):null;
-  const cbox=pplace?pplace.box:place?place.box:((imgs&&!s.charHide)?charBoxFor(d,W,H,imgs):null);
+  const cbox=pplace?pplace.box:place?place.box:p3?p3.box:(imgs?charBoxFor(d,W,H,imgs):null);
   if(withSub&&d.subtitles&&s.narration){
     ctx.font=slideFont(d,'500',40,W/1920);
     sub=wrapLines(ctx,splitCues(s.narration,44)[0]||'',(cbox?cbox.x:W)-360*W/1920).slice(0,2);
@@ -8237,7 +8531,8 @@ async function paintScene(cv,ui,si,withSub){
       ctx.drawImage(still.canvas,pplace.x,pplace.y,pplace.w,pplace.h);ctx.restore();
     }else if(place){const g=(rd.rig.gestures||{})[(s.gesture&&s.gesture!=='auto')?s.gesture:'present']||{};
       drawRig(ctx,rd.rig,rd.imgs,{armL:g.armL||0,armR:g.armR||0,mouth:'closed'},place.ox,place.oy,place.sc,d.char.flip,place.box);}
-    else if(cbox)drawCharacter(ctx,cbox,imgs,'closed',0,0,d.char.flip,W);
+    else if(p3)ctx.drawImage(g3,p3.x,p3.y,p3.w,p3.h);
+    else if(imgs&&cbox)drawCharacter(ctx,cbox,imgs,'closed',0,0,d.char.flip,W);
   };
   await draw(null);
   if(s.srcImage)loadBitmap(s.srcImage,'input').then(draw).catch(function(){});
@@ -8247,20 +8542,22 @@ async function paintScene(cv,ui,si,withSub){
 let talkStop=null;
 async function talkPreview(cv,x,onEnd){
   const s=x.s,d=courseDesign();
-  if(!s.audioOut)throw new Error('이 씬은 아직 음성이 없습니다 — 4단계에서 먼저 만드세요');
-  const useRig=d.char.mode==='rig';
-  const rd=useRig?await rigData(d):null;
-  const imgs=useRig?null:await charImages(d);
-  if(useRig&&!rd)throw new Error('캐릭터 리그 파일을 먼저 불러오세요');
-  if(!useRig&&!imgs)throw new Error('캐릭터 이미지(입 닫힘)를 먼저 올리세요');
+  if(!s.audioOut)throw new Error('이 씬은 아직 음성이 없습니다 — 3단계(오디오)에서 먼저 만드세요');
+  const cm=sceneCharMode(d,s);                           // 장면별 캐릭터
+  if(cm==='video'||cm==='avatar')throw new Error('강사 영상 장면은 말하기 미리보기 대신 5단계 렌더로 확인하세요');
+  const rd=cm==='rig'?await rigData(d):null;
+  const imgs=cm==='sprite'?await charImages(d):null;
+  if(cm==='rig'&&!rd)throw new Error('캐릭터 리그 파일을 먼저 불러오세요');
+  if(cm==='sprite'&&!(imgs&&imgs.closed))throw new Error('캐릭터 이미지(입 닫힘)를 먼저 올리세요');
+  let f3=null;if(cm==='glb'){f3=makeFlat3D();await f3.init(d,cv.width,cv.height);}
   const ac=new (window.AudioContext||window.webkitAudioContext)();
   const buf=await ac.decodeAudioData(await (await sceneAudioBlob(s)).arrayBuffer());
   const env=audioEnvelope(buf,30),tr=mouthTrack(env);
   const vis=s.srcImage?await loadBitmap(s.srcImage,'input').catch(()=>null):null;
   const u=project.units[x.ui],W=cv.width,H=cv.height,ctx=cv.getContext('2d');
-  const place=(rd&&!s.charHide)?rigPlace(d,W,H,rd.rig):null;
-  const box=s.charHide?null:(place?place.box:charBoxFor(d,W,H,imgs));
-  const move=rd?makeRigMotion(rd.rig):null;let gest='present',lastC=null,lastT=0;
+  const place=rd?rigPlace(d,W,H,rd.rig):null;
+  const box=place?place.box:f3?f3.place.box:(imgs?charBoxFor(d,W,H,imgs):null);
+  const move=makeRigMotion(rd?rd.rig:{});let gest='present',lastC=null,lastT=0;
   const cues=sceneCuesFor(s,0,buf.duration);
   const src=ac.createBufferSource();src.buffer=buf;src.connect(ac.destination);
   const t0=ac.currentTime+0.05;src.start(t0);
@@ -8274,7 +8571,7 @@ async function talkPreview(cv,x,onEnd){
       if(stopped||t>buf.duration+0.2){res();return;}
       const k=Math.floor(t*30);
       let st=tr[k]||'closed';
-      if(!rd&&st==='closed'&&imgs.blink&&isBlink(t))st='blink';
+      if(imgs&&st==='closed'&&imgs.blink&&isBlink(t))st='blink';
       let sub=null;
       if(d.subtitles){
         const c=cues.find(q=>t>=q.start&&t<q.end);
@@ -8293,17 +8590,19 @@ async function talkPreview(cv,x,onEnd){
       drawSlide(ctx,W,H,sceneOpts(x.ui,x.si,u,s,d,{visual:vis,kbDir:s.motion==='static'?'none':(s.kbDir||'in'),
         p:t/buf.duration,sub:sub,logo:_logoImg,cbox:box,
         anim:{lt:t,times:plan1.times,noteT:plan1.noteT,talking:t<buf.duration}}));
-      if(place){
+      if(place||f3){
         const c=cues.find(q=>t>=q.start&&t<q.end);
         if(c&&c!==lastC){lastC=c;gest=(s.gesture&&s.gesture!=='auto')?s.gesture:gestureFor(c.text,s.kind);}
-        const pose=move(t,Math.max(0.001,t-lastT),gest,env[k]||0,t<buf.duration);pose.mouth=st;lastT=t;
-        drawRig(ctx,rd.rig,rd.imgs,pose,place.ox,place.oy,place.sc,d.char.flip,place.box);
-      }else if(box)drawCharacter(ctx,box,imgs,st,env[k]||0,t,d.char.flip,W);
+        const pose=move(t,Math.max(0.001,t-lastT),gest,env[k]||0,t<buf.duration);pose.mouth=st==='blink'?'closed':st;pose.talk=t<buf.duration;lastT=t;
+        if(place)drawRig(ctx,rd.rig,rd.imgs,pose,place.ox,place.oy,place.sc,d.char.flip,place.box);
+        else{const P3=f3.place;ctx.drawImage(f3.render(pose,null,t),P3.x,P3.y,P3.w,P3.h);}
+      }else if(box&&imgs)drawCharacter(ctx,box,imgs,st,env[k]||0,t,d.char.flip,W);
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
   });
   talkStop=null;
+  if(f3)f3.dispose();
   ac.close();
   if(onEnd)onEnd();
 }
@@ -8333,6 +8632,7 @@ function charModeRow(c){
   return '<div class="field" style="margin-bottom:10px;max-width:360px;"><label>방식</label><select data-cm="mode">'+
     '<option value="rig"'+(c.mode==='rig'?' selected':'')+'>리그 — 팔·고개·입·눈이 움직임</option>'+
     '<option value="sprite"'+(c.mode==='sprite'?' selected':'')+'>입모양 이미지 교체</option>'+
+    '<option value="glb"'+(c.mode==='glb'?' selected':'')+'>3D 모델 (GLB) — Meshy 등에서 리깅한 모델</option>'+
     '<option value="video"'+(c.mode==='video'?' selected':'')+'>녹화 강사 영상 — 씬마다 직접 찍은 영상</option>'+
     '<option value="avatar"'+(c.mode==='avatar'?' selected':'')+'>AI 가상 강사 — 사진·기본 영상 + 음성으로 생성</option></select></div>';
 }
@@ -8505,7 +8805,7 @@ function renderPresenterCard(d){
       const w=getWorkflows('avatar').find(x=>x.id===pv.wf)||getWorkflows('avatar')[0];
       const msg=el.querySelector('[data-pv="msg"]'),stop=el.querySelector('[data-pv="stop"]');
       if(!w){msg.className='msg fail';msg.textContent='설정 → 워크플로우에 가상 강사 워크플로우를 먼저 등록하세요';return;}
-      const todo=allScenes().concat(specialTtsScenes()).filter(x=>x.s.audioOut&&avatarStale(x.s));
+      const todo=allScenes().concat(specialTtsScenes()).filter(x=>x.s.audioOut&&avatarStale(x.s)&&sceneCharMode(d,x.s)==='avatar');   // AI 가상 강사를 쓰는 씬만
       if(!todo.length){msg.className='msg ok';msg.textContent='만들 씬이 없습니다 (모두 최신)';return;}
       setBusy(true);avatarCancel=false;stop.style.display='';stop.onclick=()=>{avatarCancel=true;};
       let ok=0;const t0=Date.now();
@@ -8523,6 +8823,7 @@ function renderPresenterCard(d){
 
 function renderCharacterCard(d){
   if(d.char.mode==='rig')return renderRigCard(d);
+  if(d.char.mode==='glb')return renderGlbCharCard(d);
   if(d.char.mode==='video'||d.char.mode==='avatar')return renderPresenterCard(d);
   const c=d.char,slots=[['closed','입 닫힘','필수'],['mid','입 조금','선택'],['open','입 크게','선택'],['blink','눈 감음','선택']];
   const mode=!c.imgs.closed?'—':((c.imgs.mid||c.imgs.open)?'입모양 교체':'들썩임');
@@ -8565,6 +8866,48 @@ function renderCharacterCard(d){
     c.on=e.target.checked;persist();renderScriptStageKeepScroll();});
   cardEl.querySelector('[data-ch="size"]').addEventListener('change',function(e){c.size=parseFloat(e.target.value)||0.38;persist();renderScriptStageKeepScroll();});
   ['flip','chapter'].forEach(k=>cardEl.querySelector('[data-ch="'+k+'"]').addEventListener('change',function(e){c[k]=e.target.checked;persist();renderScriptStageKeepScroll();}));
+}
+
+/* 과정 기본 캐릭터가 3D 모델일 때: 모델 올리기 · 방식 · 크기 · 미리보기 (스튜디오 캐릭터와 같은 파일) */
+function renderGlbCharCard(d){
+  const c=d.char;
+  const el=card('char','캐릭터 (과정 공통)',(c.on?'켜짐':'꺼짐')+' · 3D 모델'+(c.glb?'':' (파일 없음)'),
+    charModeRow(c)+
+    '<label style="font-size:13px;display:flex;align-items:center;gap:7px;cursor:pointer;margin-bottom:10px;">'+
+      '<input type="checkbox" data-g3="on"'+(c.on?' checked':'')+' style="width:auto;"> 화면 오른쪽 아래에 3D 캐릭터를 세우고 나레이션에 맞춰 몸짓을 합니다</label>'+
+    '<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">'+
+      '<canvas data-g3="prev" width="200" height="278" style="border-radius:9px;background:repeating-conic-gradient(var(--surface-2) 0 25%,var(--bg) 0 50%) 0 0/16px 16px;"></canvas>'+
+      '<div style="flex:1;min-width:240px;">'+
+        '<div class="lorarow" style="margin:0 0 8px;"><button class="btn small" data-g3="pick">'+(c.glb?'모델 바꾸기':'GLB 올리기')+'</button>'+
+          (c.glb?'<span class="msg ok">'+esc(c.glb.name)+' · '+(c.glb.size/1048576).toFixed(1)+'MB</span>':'<span class="msg">모델 없음</span>')+
+          '<input type="file" hidden accept=".glb,model/gltf-binary" data-g3="file"></div>'+
+        '<div class="field" style="margin-bottom:8px;"><label>모델 방식</label><select data-g3="mode">'+
+          '<option value="asis"'+((c.glbMode||'asis')==='asis'?' selected':'')+'>원본 그대로 — Meshy 등 전문 도구 모델</option>'+
+          '<option value="fix"'+(c.glbMode==='fix'?' selected':'')+'>자동 보정 — TRELLIS 등 AI 생성 모델 (2D 리그 필요)</option></select></div>'+
+        '<div class="field"><label>크기 (화면 높이의 '+Math.round((c.size||0.42)*100)+'%)</label>'+
+          '<input type="range" min="0.3" max="0.55" step="0.01" data-g3="size" value="'+(c.size||0.42)+'"></div>'+
+        '<label style="font-size:12.5px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-top:8px;"><input type="checkbox" data-g3="chapter"'+(c.chapter?' checked':'')+' style="width:auto;"> 장 표지에도 표시</label>'+
+      '</div></div>'+
+    '<p class="note" style="margin-top:8px;">뼈대가 있는 모델(Meshy 리깅 등)은 설명·가리키기·손 흔들기 같은 몸짓을 하고, 모델 안의 대기·걷기 동작이 있으면 그것을 씁니다. '+
+      '스튜디오 장면의 3D 캐릭터도 이 파일을 씁니다. 씬마다 다른 캐릭터를 쓰려면 4단계 영상 편집에서 고르세요.</p>');
+  bindCharMode(el,c);
+  const q=k=>el.querySelector('[data-g3="'+k+'"]');
+  q('on').addEventListener('change',function(e){
+    if(e.target.checked&&!c.glb){alert('먼저 3D 모델(GLB)을 올리세요.');e.target.checked=false;return;}
+    c.on=e.target.checked;persist();renderScriptStageKeepScroll();});
+  q('pick').addEventListener('click',()=>q('file').click());
+  q('file').addEventListener('change',async function(e){
+    const f=e.target.files&&e.target.files[0];e.target.value='';if(!f)return;
+    if(f.size>300*1048576){alert('300MB 이하 모델만 올릴 수 있습니다.');return;}
+    try{const id=uid('m');await Store.putBlob(id,f);if(c.glb)Store.delBlob(c.glb.id).catch(()=>{});
+      c.glb={id:id,name:f.name,size:f.size};c.on=true;persist();renderScriptStageKeepScroll();}catch(err){alert('모델을 저장하지 못했습니다: '+err.message);}});
+  q('mode').addEventListener('change',function(e){c.glbMode=e.target.value;persist();renderScriptStageKeepScroll();});
+  q('size').addEventListener('change',function(e){c.size=parseFloat(e.target.value)||0.42;persist();renderScriptStageKeepScroll();});
+  q('chapter').addEventListener('change',function(e){c.chapter=e.target.checked;persist();renderScriptStageKeepScroll();});
+  const pv=q('prev');
+  glbStill(d).then(function(cv){const x=pv.getContext('2d');x.clearRect(0,0,pv.width,pv.height);
+    if(!cv){x.fillStyle='#888';x.font='13px sans-serif';x.textAlign='center';x.fillText(c.glb?'모델을 읽지 못했습니다':'모델 없음',pv.width/2,pv.height/2);return;}
+    const k=Math.min(pv.width/cv.width,pv.height/cv.height),w=cv.width*k,h=cv.height*k;x.drawImage(cv,(pv.width-w)/2,pv.height-h,w,h);});
 }
 
 function unitEstSec(u){
@@ -8784,13 +9127,12 @@ function renderStoryboardStage(){
           (resolveLayout(u,si)==='hotspot'?'<button class="btn small primary" data-a="hsp" title="장비 사진 위를 항목 순서대로 클릭해 핫스팟 위치를 정합니다">핫스팟 위치</button>':'')+
           (t2i.length?'<button class="btn small" data-a="gen">AI 생성</button>':'')+
           (s.srcImage?'<button class="btn small ghost" data-a="clear">지우기</button>':'')+
-          (d.char&&d.char.on?'<label style="font-size:11.5px;display:flex;align-items:center;gap:4px;margin-left:auto;cursor:pointer;">'+
-            '<input type="checkbox" data-a="char"'+(s.charHide?'':' checked')+' style="width:auto;"> 캐릭터</label>':'')+
-          (d.char&&d.char.on&&d.char.mode==='rig'?'<select data-a="gest" title="몸짓" style="width:100%;font-size:11.5px;padding:4px;margin-top:5px;">'+
+          '<div style="width:100%;margin-top:5px;">'+charModeSelect(d,s,'data-a="cmode" style="width:100%;font-size:11.5px;padding:4px;"')+'</div>'+
+          (charGestOn(d,s)?'<select data-a="gest" title="몸짓" style="width:100%;font-size:11.5px;padding:4px;margin-top:5px;">'+
             Object.keys(GEST_LABEL).map(k=>'<option value="'+k+'"'+((s.gesture||'auto')===k?' selected':'')+'>'+GEST_LABEL[k]+'</option>').join('')+'</select>':'')+
-          (presenterOn(d)&&d.char.mode==='video'?'<div class="lorarow" style="margin:6px 0 0;"><button class="btn small" data-a="pvPick">'+(s.presenterVid?'강사 영상 바꾸기':'강사 영상 올리기')+'</button>'+
+          (sceneCharMode(d,s)==='video'?'<div class="lorarow" style="margin:6px 0 0;"><button class="btn small" data-a="pvPick">'+(s.presenterVid?'강사 영상 바꾸기':'강사 영상 올리기')+'</button>'+
             (s.presenterVid?'<span class="msg ok">'+fmtDur(s.presenterVid.dur||0)+'</span>':'')+'<input type="file" hidden accept="video/*" data-a="pvFile"></div>':'')+
-          (presenterOn(d)&&d.char.mode==='avatar'?'<div class="lorarow" style="margin:6px 0 0;"><button class="btn small" data-a="avGen">'+(s.avatarOut&&!avatarStale(s)?'가상 강사 다시':'가상 강사 만들기')+'</button>'+
+          (sceneCharMode(d,s)==='avatar'?'<div class="lorarow" style="margin:6px 0 0;"><button class="btn small" data-a="avGen">'+(s.avatarOut&&!avatarStale(s)?'가상 강사 다시':'가상 강사 만들기')+'</button>'+
             '<span class="msg'+(s.avatarOut&&!avatarStale(s)?' ok':'')+'" data-a="avMsg">'+(!s.audioOut?'음성 먼저':!s.avatarOut?'없음':avatarStale(s)?'음성이 바뀜':'준비됨')+'</span></div>':'')+
           '<input type="file" accept="image/*" hidden data-a="file"></div>'+
         '<div class="msg" data-a="st" style="margin-top:4px;font-size:11px;">'+
@@ -8854,9 +9196,8 @@ function renderStoryboardStage(){
       });
       const gs=el.querySelector('[data-a="gest"]');
       if(gs)gs.addEventListener('change',function(e){s.gesture=e.target.value;persist();paintScene(cv,ui,si,false);if(sbSel===s.id)showPreview();});
-      const chk=el.querySelector('[data-a="char"]');
-      if(chk)chk.addEventListener('change',function(e){
-        s.charHide=!e.target.checked;persist();paintScene(cv,ui,si,false);if(sbSel===s.id)showPreview();});
+      const cms=el.querySelector('[data-a="cmode"]');
+      if(cms)cms.addEventListener('change',function(e){setSceneCharMode(s,e.target.value);persist();renderScriptStageKeepScroll();});
       const cb=el.querySelector('[data-a="clear"]');
       if(cb)cb.addEventListener('click',function(){
         if(isClip&&!confirm('클립의 시작 이미지도 함께 지워집니다. 계속할까요?'))return;
@@ -9499,21 +9840,26 @@ function renderPartsDesignCard(){
     box.style.cssText='border:1px solid var(--border);border-radius:9px;padding:6px;background:var(--bg);';
     box.innerHTML='<canvas width="480" height="270" style="width:100%;border-radius:5px;display:block;"></canvas>'+
       '<div style="font-size:12px;margin-top:5px;">'+esc(s.title)+(s.audioOut?' <span class="msg ok" style="font-size:11px;">음성 ✓</span>':'')+'</div>';
-    const cv=box.querySelector('canvas');
-    const vid=(s.kind==='intro'&&partsCfg().introMode==='video')||(s.kind==='outro'&&partsCfg().outroMode==='video');
-    if(useHtmlFor(d,s.kind)&&!vid){
-      const inf=specialInfo(s),hero=s.kind==='intro'||s.kind==='outro';
-      const pg=listPaging(s.kind,inf,[],0);
-      HtmlStage.run(()=>drawHtmlSlide(cv.getContext('2d'),480,270,htmlOpts(d,{design:d,layout:s.kind,info:pg.info,
-        label:s.kind.indexOf('quiz')===0?('평가 · 문제 '+(inf.quizIndex+1)+' / '+inf.quizTotal):(s.kind==='summary'?'마무리':'도입'),
-        title:s.kind==='quizA'?'정답과 해설':s.kind==='quizQ'?((inf.quiz&&inf.quiz.type==='ox')?'O, X로 답하세요':'알맞은 답을 고르세요'):((SPECIAL_TITLE[s.kind]||'')+(pg.pages>1?' (1/'+pg.pages+')':'')),
-        footerL:hero?'':lessonFooter(),footerR:hero?'':(s.kind.indexOf('quiz')===0?'평가 · 정리':'도입'),logo:d.logo||null,
-        thinkStart:0,thinkLen:partsCfg().thinkSec},480,270),99,{talking:false,preview:true})).catch(function(){});
-    }else
-    drawSpecial(cv.getContext('2d'),480,270,{design:d,kind:s.kind,scene:s,info:specialInfo(s),static:true,lt:99,dur:10,aStart:0,aDur:1,
-      thinkStart:0,thinkLen:partsCfg().thinkSec,logo:_logoImg,footerL:lessonFooter(),footerR:s.kind.indexOf('quiz')===0?'평가 · 정리':'도입'});
+    paintSpecialThumb(box.querySelector('canvas'),s,d);
     pv.appendChild(box);
   });
+}
+/* 도입·마무리 화면(인트로·학습목표·평가…) 미리보기 그림 */
+function paintSpecialThumb(cv,s,d){
+  const W=cv.width,H=cv.height;
+  const vid=(s.kind==='intro'&&partsCfg().introMode==='video')||(s.kind==='outro'&&partsCfg().outroMode==='video');
+  if(useHtmlFor(d,s.kind)&&!vid){
+    const inf=specialInfo(s),hero=s.kind==='intro'||s.kind==='outro';
+    const pg=listPaging(s.kind,inf,[],0);
+    return HtmlStage.run(()=>drawHtmlSlide(cv.getContext('2d'),W,H,htmlOpts(d,{design:d,layout:s.kind,info:pg.info,
+      label:s.kind.indexOf('quiz')===0?('평가 · 문제 '+(inf.quizIndex+1)+' / '+inf.quizTotal):(s.kind==='summary'?'마무리':'도입'),
+      title:s.kind==='quizA'?'정답과 해설':s.kind==='quizQ'?((inf.quiz&&inf.quiz.type==='ox')?'O, X로 답하세요':'알맞은 답을 고르세요'):((SPECIAL_TITLE[s.kind]||'')+(pg.pages>1?' (1/'+pg.pages+')':'')),
+      footerL:hero?'':lessonFooter(),footerR:hero?'':(s.kind.indexOf('quiz')===0?'평가 · 정리':'도입'),logo:d.logo||null,
+      thinkStart:0,thinkLen:partsCfg().thinkSec},W,H),99,{talking:false,preview:true})).catch(function(){});
+  }
+  drawSpecial(cv.getContext('2d'),W,H,{design:d,kind:s.kind,scene:s,info:specialInfo(s),static:true,lt:99,dur:10,aStart:0,aDur:1,
+    thinkStart:0,thinkLen:partsCfg().thinkSec,logo:_logoImg,footerL:lessonFooter(),footerR:s.kind.indexOf('quiz')===0?'평가 · 정리':'도입'});
+  return Promise.resolve();
 }
 
 /* ══════════ 시험·자가 진단용 창구 ══════════
