@@ -5106,12 +5106,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var want = nthMark(mk.k, counters[key]);
       if (want === mk.mark) return m;
       // 첫 표식 한 번만 바꾼다 (안쪽 태그는 건드리지 않음)
+      // 빈칸뿐인 조각(<b> </b> · &nbsp;)은 건너뛰고, 글자가 처음 나오는 조각에서만 표식을 찾는다
       var done = false;
-      var newInner = inner.replace(/(^|>)([^<]+)/, function (mm, lead, seg) {
+      var newInner = inner.replace(/(^|>)([^<]+)/g, function (mm, lead, seg) {
         if (done) return mm;
-        var s = seg.replace(/^[\s ]*/, '');
-        if (s.indexOf(mk.mark) !== 0) return mm;
+        var s = seg.replace(/^(?:[\s ]|&nbsp;|&#160;)*/, '');
+        if (!s) return mm;
         done = true;
+        if (s.indexOf(mk.mark) !== 0) return mm;
         var head = seg.slice(0, seg.length - s.length);
         return lead + head + want + s.slice(mk.mark.length);
       });
@@ -5798,13 +5800,18 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       return placeBlock(u);
     }
 
-    for (var i = 0; i < units.length; i++) {
-      await place(units[i]);
-      if (i % 25 === 24) await tick();
+    // 도중에 예외가 나도 숨은 조판 무대는 치운다. opt.cancel() 이 참이면(더 새 조판이 시작됨) 중간에 멈춘다
+    try {
+      for (var i = 0; i < units.length; i++) {
+        if (opt.cancel && opt.cancel()) { stats.cancelled = true; break; }
+        await place(units[i]);
+        if (i % 25 === 24) await tick();
+      }
+      if (deferred.length) flush(false);
+      pushPage(false);
+    } finally {
+      outer.remove();
     }
-    if (deferred.length) flush(false);
-    pushPage(false);
-    outer.remove();
     return { pages: pages, refMap: refMap, bidPage: bidPage, secPages: secPages, stats: stats, bidH: bidH, capPx: cap };
   }
 
@@ -7634,7 +7641,7 @@ root.KEEA_IDML = {
   function buildCsv(links) {
     var rows = [['파일명', '그림번호', '캡션', '가로(px)', '세로(px)']];
     links.forEach(function (l) {
-      rows.push([l.name.replace(/^Links\//, ''), l.number || '', (l.caption || '').replace(/"/g, '""'), l.w, l.h]);
+      rows.push([l.name.replace(/^Links\//, ''), l.number || '', l.caption || '', l.w, l.h]);   // 따옴표는 아래에서 한 번만 이스케이프
     });
     return '\ufeff' + rows.map(function (r) {
       return r.map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(',');
@@ -7931,6 +7938,8 @@ function defaultState(){
     indexTerms:[],
     review:{ date:'', reportAuthor:'', subject:'', authorTeacher:'', reviewerTeacher:'', reviewerOpinion:'', authorResponse:'' },
     opinions:[],
+    // 교재마다 따로인 관리 기록 — 여기 있어야 다른 교재를 열거나 초기화할 때 앞 교재 것(배포 기록·강사 암호 등)이 남지 않는다
+    spellIgnore:[], writerInfo:{}, subLog:[], distBase:{}, distLog:[], trash:[],
     parts:[]
   };
 }
@@ -11790,6 +11799,13 @@ function ruleCheck(state, scope, glossary){
   const issues = [];
   const ignore = new Set((state && state.spellIgnore) || []);
   const pieces = collectPieces(state, scope);
+  // 규칙 정규식은 검사 한 번에 한 번만 만든다 (줄마다 130여 개를 새로 만들면 큰 원고에서 1초 가까이 멈춘다)
+  // ry: 원문 줄의 그 자리에서 다시 맞춰 고칠 말을 만드는 sticky 판. 일치한 글자만 떼어 다시 맞추면
+  //     앞뒤 글자를 보는 규칙(게되(?=다…), 들어나(?=고…))은 맞지 않아 지적이 통째로 빠졌다
+  const RULES = SPELL_RULES.concat(SPELL_MORE).map(([re, fix, desc, kind])=>({
+    rx: new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g'),
+    ry: new RegExp(re.source, re.flags.replace(/[gy]/g, '') + 'y'),
+    fix, desc, kind }));
 
   // 1~3) 문단 단위로 검사해야 발췌(원문)가 정확해진다
   pieces.forEach(p=>{
@@ -11797,13 +11813,18 @@ function ruleCheck(state, scope, glossary){
       if(!line.trim()) return;
 
       // 맞춤법 / 띄어쓰기
-      SPELL_RULES.concat(SPELL_MORE).forEach(([re, fix, desc, kind])=>{
-        const rx = new RegExp(re.source, re.flags.includes('g')?re.flags:re.flags+'g');
+      RULES.forEach(({ rx, ry, fix, desc, kind })=>{
+        rx.lastIndex = 0;
         let m;
         while((m = rx.exec(line))){
           if(m.index === rx.lastIndex) rx.lastIndex++;
           const hit = m[0];
-          const suggest = fix ? hit.replace(new RegExp(re.source), fix) : null;
+          let suggest = null;
+          if(fix){
+            ry.lastIndex = m.index;
+            const whole = line.replace(ry, fix);
+            suggest = whole.slice(m.index, whole.length - (line.length - m.index - hit.length));
+          }
           if(fix && suggest === hit) continue;
           if(ignore.has(hit)) continue;
           // 짧은 지적은 앞뒤 글을 붙여 보여 준다 (고칠 때도 그 자리를 정확히 찾게)
@@ -11889,12 +11910,13 @@ function ruleCheck(state, scope, glossary){
   });
   // 5) 협회 표준 용어집 기준 — 표준이 아닌 표기를 찾아 표준 표기로 고칠 수 있게 한다
   const terms = (glossary && glossary.length) ? glossary : DEFAULT_GLOSSARY;
+  const termRx = terms.map(t=>({ t, rxs: (t.variants||[]).filter(Boolean)
+    .map(v=>({ v, rx: new RegExp(v.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'), 'g') })) }));
   pieces.forEach(p=>{
-    terms.forEach(t=>{
-      (t.variants||[]).forEach(v=>{
-        if(!v) return;
+    termRx.forEach(({ t, rxs })=>{
+      rxs.forEach(({ v, rx })=>{
         let m;
-        const rx = new RegExp(v.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'), 'g');
+        rx.lastIndex = 0;
         while((m = rx.exec(p.text))){
           issues.push(mkIssue(p, '표준 용어', 'mid', v,
             `협회 표준 표기는 '${t.standard}'입니다${t.note?' — '+t.note:''}`, t.standard));
@@ -12093,6 +12115,8 @@ async function aiCheckBatch(cfg, pieces){
   return out;
 }
 
+// 수식·각주·참조 칸 속 글자(그려 놓은 MathML · [그림 1-3])는 고치지 않는다 — 원본은 data-eq · data-fn · data-ref 에 있다
+function inAtomSpan(node){ const pe = node.parentElement; return !!(pe && pe.closest && pe.closest('.eq,.fn,.xref')); }
 // HTML 안의 "텍스트 노드"만 골라 치환한다. (태그를 깨뜨리지 않기 위함)
 function replaceInHtml(html, find, repl){
   const root = document.createElement('div');
@@ -12100,7 +12124,7 @@ function replaceInHtml(html, find, repl){
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
   let node, done = false;
   const targets = [];
-  while((node = walker.nextNode())) targets.push(node);
+  while((node = walker.nextNode())) if(!inAtomSpan(node)) targets.push(node);
   for(const t of targets){
     const i = t.nodeValue.indexOf(find);
     if(i >= 0){
@@ -12109,6 +12133,37 @@ function replaceInHtml(html, find, repl){
     }
   }
   return { html: root.innerHTML, ok: done };
+}
+
+// 꾸밈 경계에 걸친 발췌('<span>정확이</span> 측정한' 처럼)도 고친다.
+// 글자 마디들을 이어 붙인 글에서 찾고, 앞뒤 같은 글자는 두고 실제로 바뀌는 가운데만 그 자리 마디에서 고친다 — 꾸밈 태그는 그대로 남는다
+function replaceAcrossNodes(html, find, repl){
+  const root = document.createElement('div');
+  root.innerHTML = html || '';
+  const blockOf = t=>{ let e = t.parentElement; while(e && e !== root && !/^(P|DIV|LI|TD|TH|H[1-6])$/.test(e.tagName)) e = e.parentElement; return e; };
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  const nodes = [], starts = []; let n, full = '', prevB;
+  while((n = w.nextNode())){
+    if(inAtomSpan(n)) continue;
+    const bl = blockOf(n);
+    if(nodes.length && bl !== prevB) full += '\n';         // 문단이 다르면 이어 붙이지 않는다 (문단을 넘는 엉뚱한 일치 방지)
+    prevB = bl; nodes.push(n); starts.push(full.length); full += n.nodeValue;
+  }
+  const at = find ? full.indexOf(find) : -1;
+  if(at < 0) return { html: root.innerHTML, ok:false };
+  let pre = 0; while(pre < find.length && pre < repl.length && find[pre] === repl[pre]) pre++;
+  let suf = 0; while(suf < find.length - pre && suf < repl.length - pre && find[find.length-1-suf] === repl[repl.length-1-suf]) suf++;
+  const a = at + pre, z = at + find.length - suf, ins = repl.slice(pre, repl.length - suf);
+  let placed = false;
+  nodes.forEach((t, i)=>{
+    const s = starts[i], e = s + t.nodeValue.length;
+    if(e < a || s > z) return;
+    const from = Math.max(a, s) - s, to = Math.min(z, e) - s;
+    if(!placed){
+      if(a >= s && (a < e || z === a)){ t.nodeValue = t.nodeValue.slice(0, from) + ins + t.nodeValue.slice(to); placed = true; }
+    } else t.nodeValue = t.nodeValue.slice(0, from) + t.nodeValue.slice(to);
+  });
+  return { html: root.innerHTML, ok: placed };
 }
 
 // ==================== 이미지 압축 (저장 용량/인쇄 렌더링 문제 예방) ====================
@@ -12448,31 +12503,51 @@ async function optimizeExistingImages(state){
 // 기존에 localStorage에 저장돼 있던 원고는 그대로 이어서 불러온다.
 const IDB_NAME = IS_WRITER ? 'keea_writer_db' : 'keea_textbook_db';   // 강사용은 관리자 원고와 저장소를 나눈다
 const IDB_STORE = 'kv';
+// 연결은 한 번 열어 계속 쓴다 (예전에는 읽고 쓸 때마다 새로 열고 닫지 않아 자동저장 한 번에 연결이 셋씩 쌓였다)
+let _idbConn = null;
 function idbOpen(){
-  return new Promise((resolve, reject)=>{
+  if(_idbConn) return _idbConn;
+  const p = new Promise((resolve, reject)=>{
     if(!window.indexedDB){ reject(new Error('IndexedDB 미지원')); return; }
     const req = indexedDB.open(IDB_NAME, 1);
     req.onupgradeneeded = ()=>{ req.result.createObjectStore(IDB_STORE); };
-    req.onsuccess = ()=>resolve(req.result);
+    req.onsuccess = ()=>{
+      const db = req.result;
+      // 다른 탭이 판을 올리거나 브라우저가 연결을 끊으면 다음 번에 새로 연다
+      db.onversionchange = ()=>{ try{ db.close(); }catch(e){} if(_idbConn === p) _idbConn = null; };
+      db.onclose = ()=>{ if(_idbConn === p) _idbConn = null; };
+      resolve(db);
+    };
     req.onerror = ()=>reject(req.error);
   });
+  _idbConn = p;
+  p.catch(()=>{ if(_idbConn === p) _idbConn = null; });
+  return p;
+}
+function idbBegin(db, mode){
+  try{ return db.transaction(IDB_STORE, mode); }
+  catch(e){ _idbConn = null; throw e; }               // 끊긴 연결 — 다음 번에 새로 연다
 }
 async function idbGet(key){
   const db = await idbOpen();
   return new Promise((resolve, reject)=>{
-    const tx = db.transaction(IDB_STORE, 'readonly');
+    const tx = idbBegin(db, 'readonly');
     const req = tx.objectStore(IDB_STORE).get(key);
     req.onsuccess = ()=>resolve(req.result);
     req.onerror = ()=>reject(req.error);
+    tx.onabort = ()=>reject(tx.error || new Error('IndexedDB 읽기가 취소되었습니다'));
   });
 }
+// 저장 공간이 모자라면(QuotaExceededError) 거래는 error 가 아니라 abort 로 끝난다.
+// abort 를 받지 않으면 Promise 가 영영 끝나지 않아, 저장이 멈췄는데도 화면에는 '자동저장됨'이 남는다
 async function idbSet(key, value){
   const db = await idbOpen();
   return new Promise((resolve, reject)=>{
-    const tx = db.transaction(IDB_STORE, 'readwrite');
-    tx.objectStore(IDB_STORE).put(value, key);
+    const tx = idbBegin(db, 'readwrite');
     tx.oncomplete = ()=>resolve();
     tx.onerror = ()=>reject(tx.error);
+    tx.onabort = ()=>reject(tx.error || new Error('IndexedDB 저장이 취소되었습니다(저장 공간 부족일 수 있음)'));
+    tx.objectStore(IDB_STORE).put(value, key);
   });
 }
 
@@ -13024,6 +13099,7 @@ function collectFields(state, scope, includeMeta){
         (sec.blocks||[]).forEach(b=>{
           const bd = { ...d, blockId:b.id };
           if(b.type==='heading') list.push({ ...bd, field:'headingText', where:`${base} — 소제목 ${b.number||''}` });
+          if(b.type==='item' && String(b.text||'').trim()) list.push({ ...bd, field:'itemText', where:`${base} — 번호 항목 ${b.number||''}` });
           if(b.type==='text'||b.type==='note') list.push({ ...bd, field:'blockHtml',   where:`${base} — 본문` });
           if((b.type==='image'||b.type==='table') && b.caption)
             list.push({ ...bd, field:'caption', where:`${base} — 캡션 [${b.type==='image'?'그림':'표'} ${b.number||''}]` });
@@ -13045,6 +13121,17 @@ function collectFields(state, scope, includeMeta){
   });
   return list;
 }
+// 꾸민 글(굵게·색·글 속 그림·참조)이 든 표 칸·번호 항목: text 만 바꾸면 cellRichHtml 이 html 을 버려 꾸밈이 사라진다.
+// html 이 text 와 맞물려 있으면 html 의 글자 마디에서 고치고 text 를 다시 뽑는다
+function richInSync(c){ return !!(c && typeof c.html === 'string' && c.htmlText === c.text); }
+function setRichHtml(c, html){
+  const d = document.createElement('div'); d.innerHTML = html;
+  c.html = html; c.text = cellFromEl(d); c.htmlText = c.text;
+}
+function richAccessor(c){
+  if(richInSync(c)) return { get:()=>c.html, set:v=>setRichHtml(c, v), isHtml:true };
+  return { get:()=>String(c.text||''), set:v=>{ c.text = v; } };
+}
 // 기록해 둔 위치를 실제 데이터로 연결
 function fieldAccessor(state, d){
   if(d.field==='metaTitle')    return { get:()=>state.meta.title||'',    set:v=>state.meta.title=v };
@@ -13059,10 +13146,11 @@ function fieldAccessor(state, d){
   const blk = (sec.blocks||[]).find(b=>b.id===d.blockId); if(!blk) return null;
   if(d.field==='headingText') return { get:()=>blk.text||'',    set:v=>blk.text=v };
   if(d.field==='caption')     return { get:()=>blk.caption||'', set:v=>blk.caption=v };
+  if(d.field==='itemText') return richAccessor(blk);
   if(d.field==='cell'){
     const c = normCell((blk.rows[d.row]||[])[d.col], true); if(!c) return null;
     blk.rows[d.row][d.col] = c;
-    return { get:()=>String(c.text||''), set:v=>c.text=v };
+    return richAccessor(c);
   }
   if(d.field==='cellImgCap'){
     const c = normCell((blk.rows[d.row]||[])[d.col], true); if(!c || !c.img) return null;
@@ -13071,7 +13159,7 @@ function fieldAccessor(state, d){
   if(d.field==='subCell'){
     const c = normCell((blk.rows[d.row]||[])[d.col], true); if(!c || !c.sub) return null;
     const sc = (c.sub.rows[d.srow]||[])[d.scol]; if(!sc) return null;
-    return { get:()=>String(sc.text||''), set:v=>sc.text=v };
+    return richAccessor(sc);
   }
   if(d.field==='blockHtml')   return { get:()=>blk.html||'', set:v=>blk.html=v, isHtml:true };
   return null;
@@ -13081,7 +13169,7 @@ function htmlTextNodes(html){
   root.innerHTML = html || '';
   const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
   const nodes = []; let n;
-  while((n = w.nextNode())) nodes.push(n);
+  while((n = w.nextNode())) if(!inAtomSpan(n)) nodes.push(n);      // 수식·각주·참조 칸 속은 찾지도 바꾸지도 않는다
   return { root, nodes };
 }
 // 한 자리에서 검색어가 나온 위치들을 문맥과 함께 돌려준다
@@ -13159,8 +13247,9 @@ function stateStats(body){
   return { parts:(body.parts||[]).length, sections, figures, tables, chars };
 }
 async function snapCreate(state, label, auto, bookId){
-  const body = JSON.parse(JSON.stringify(state));
-  const json = JSON.stringify(body);
+  // 문자열로는 한 번만 바꾼다 (예전: 문자열 → 객체 → 또 문자열 — 큰 원고면 수십 MB 를 세 번)
+  const json = JSON.stringify(Vue.toRaw(state));
+  const body = JSON.parse(json);
   const id = uid();
   await idbSet(SNAP_PREFIX + id, body);
   const list = await snapList();
@@ -13264,10 +13353,11 @@ async function libDelete(id){
 async function idbDelete(key){
   const db = await idbOpen();
   return new Promise((resolve, reject)=>{
-    const tx = db.transaction(IDB_STORE, 'readwrite');
-    tx.objectStore(IDB_STORE).delete(key);
+    const tx = idbBegin(db, 'readwrite');
     tx.oncomplete = ()=>resolve();
     tx.onerror = ()=>reject(tx.error);
+    tx.onabort = ()=>reject(tx.error || new Error('IndexedDB 지우기가 취소되었습니다'));
+    tx.objectStore(IDB_STORE).delete(key);
   });
 }
 
@@ -13574,11 +13664,26 @@ const app = createApp({
     let saveTimer=null;
     let bookReady = false;            // 교재를 다 불러오기 전에는 자동저장하지 않는다
     let lastStats = { at:0, id:'', stats:null, bytes:0 };
+    // 고친 차례(editSeq)와 저장을 마친 차례(savedSeq) — 둘이 다르면 아직 저장되지 않은 고침이 있다 (탭 닫기 경고에 쓴다)
+    let editSeq = 0, savedSeq = 0;
     watch(state, ()=>{
       recomputeNumbers();
       if(!bookReady) return;
+      editSeq++;
       clearTimeout(saveTimer);
-      saveTimer = setTimeout(async ()=>{
+      saveTimer = setTimeout(autosaveNow, 900);
+    }, {deep:true});
+    // 창을 숨기거나(다른 탭·창 닫기 직전) 할 때: 쌓인 입력을 넣고 기다리지 않고 바로 저장한다
+    document.addEventListener('visibilitychange', ()=>{
+      if(document.visibilityState !== 'hidden' || !bookReady) return;
+      flushAllEditables();
+      nextTick(()=>{ if(saveTimer) autosaveNow(); });
+    });
+    // 아직 저장 안 된 고침이 있는가 — 맨 아래 beforeunload 가 보고 닫기 전에 한 번 묻는다
+    window.__keeaUnsaved = ()=> bookReady && editSeq !== savedSeq;
+    async function autosaveNow(){
+        clearTimeout(saveTimer); saveTimer = null;
+        const seq = editSeq;
         const nowStr = new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
         // 반응형 껍데기를 벗긴 원본을 그대로 저장소에 넘긴다 (저장소가 그 자리에서 복제) — 20MB 를 두 번 문자열로 바꾸지 않는다
         const plain = Vue.toRaw(state);
@@ -13600,16 +13705,22 @@ const app = createApp({
             await idbSet(STORAGE_KEY, plain);
           }
           saveStatus.value = '자동저장됨 ' + nowStr;
+          savedSeq = Math.max(savedSeq, seq);
         }catch(e){
-          try{
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(plain));
-            saveStatus.value = '자동저장됨 ' + nowStr;
-          }catch(e2){
-            saveStatus.value = '저장 실패(용량 초과) - 내보내기(.json)로 백업하세요';
+          // localStorage 는 교재 목록이 없는 옛 단일 원고일 때만 다음 실행에서 읽힌다.
+          // 교재 저장이 실패한 것을 '자동저장됨'으로 보이면 안 되므로, 교재일 때는 실패를 그대로 알린다
+          if(!id){
+            try{
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(plain));
+              saveStatus.value = '자동저장됨 ' + nowStr;
+              savedSeq = Math.max(savedSeq, seq);
+              return;
+            }catch(e2){}
           }
+          console.error('자동저장 실패', e);
+          saveStatus.value = '⚠ 자동저장 실패' + (e && e.name === 'QuotaExceededError' ? '(저장 공간 부족)' : '') + ' — 내보내기(.json)로 바로 백업하세요';
         }
-      }, 900);
-    }, {deep:true});
+    }
 
     // ---------- 기존 데이터 이전 + 이미지 자동 최적화 ----------
     onMounted(async ()=>{
@@ -16801,7 +16912,8 @@ const app = createApp({
         // 앞뒤 절과 한 쪽을 나눠 쓰는 경우까지 인쇄와 똑같이 나온다.
         const span = ap.focus;
         const cIdx = chapterIndex(part, chapter);
-        const res = await window.KEEA_TYPESET.paginate(chapterUnits(part, pIdx, chapter, cIdx), typesetOpt());
+        // 그 사이 또 고쳐 새 조판이 시작되면 이 조판은 중간에 멈춘다 (예전: 장 전체를 끝까지 조판한 뒤에야 버려 여러 벌이 겹쳐 돌았다)
+        const res = await window.KEEA_TYPESET.paginate(chapterUnits(part, pIdx, chapter, cIdx), Object.assign(typesetOpt(), { cancel: ()=>my !== pvSeq }));
         if(my !== pvSeq) return;                       // 그 사이 또 고쳤으면 버린다
         rememberChapterPages(chapter, res.pages.length);
         let from = 0, to = res.pages.length - 1;
@@ -18338,19 +18450,29 @@ const app = createApp({
         if(!String(blk.caption||'').includes(it.excerpt)){ it.status='failed'; return; }
         blk.caption = blk.caption.replace(it.excerpt, it.suggest); it.status='applied'; return;
       }
-      if(it.field==='text'){   // 소제목 블록
-        if(!String(blk.text||'').includes(it.excerpt)){ it.status='failed'; return; }
-        blk.text = blk.text.replace(it.excerpt, it.suggest); it.status='applied'; return;
+      // 소제목·번호 항목(text) · 표 칸(cell): 꾸민 글이면 html 의 글자 마디에서 고쳐 굵게·색·글 속 그림·참조를 지킨다
+      const fixRich = c=>{
+        const cur = String(c.text||'');
+        if(!cur.includes(it.excerpt)) return false;
+        if(richInSync(c)){
+          let r = replaceInHtml(c.html, it.excerpt, it.suggest);
+          if(!r.ok) r = replaceAcrossNodes(c.html, it.excerpt, it.suggest);     // 꾸밈 경계에 걸친 발췌
+          if(!r.ok) return false;              // 그래도 못 찾으면 꾸밈을 버리느니 손으로 고치게 둔다
+          setRichHtml(c, r.html); return true;
+        }
+        c.text = cur.replace(it.excerpt, it.suggest); return true;
+      };
+      if(it.field==='text'){   // 소제목 · 번호 항목
+        it.status = fixRich(blk) ? 'applied' : 'failed'; return;
       }
       if(it.field==='cell'){
         const c = normCell((blk.rows[it.row]||[])[it.col], true);
         blk.rows[it.row][it.col] = c;
-        const cur = String(c.text||'');
-        if(!cur.includes(it.excerpt)){ it.status='failed'; return; }
-        c.text = cur.replace(it.excerpt, it.suggest); it.status='applied'; return;
+        it.status = fixRich(c) ? 'applied' : 'failed'; return;
       }
       if(it.field==='html'){
-        const r = replaceInHtml(blk.html, it.excerpt, it.suggest);
+        let r = replaceInHtml(blk.html, it.excerpt, it.suggest);
+        if(!r.ok) r = replaceAcrossNodes(blk.html, it.excerpt, it.suggest);    // 굵게·색 경계에 걸친 발췌도 꾸밈을 지키며 고친다
         if(!r.ok){ it.status='failed'; return; }
         blk.html = r.html; it.status='applied'; return;
       }
@@ -19644,7 +19766,7 @@ const app = createApp({
       snapBusy.value = true;
       try{
         const r = await snapCreate(state, label, auto, currentBookId.value);
-        lastSnapSig = String(r.json.length);
+        lastSnapSig = hashStr(r.json);
         await refreshSnaps();
         if(!auto) snapMsg.value = `'${label}' 버전을 저장했습니다.`;
       }catch(e){ snapMsg.value = '버전 저장 실패: ' + e.message; }
@@ -19663,8 +19785,10 @@ const app = createApp({
         await snapCreate(state, '복원 직전 자동 저장', true, currentBookId.value);
         const body = await snapGet(entry.id);
         if(!body) throw new Error('저장된 내용을 찾을 수 없습니다.');
+        const keepDist = state.distLog;
         Object.assign(state, defaultState());
         Object.assign(state, normalizeState(JSON.parse(JSON.stringify(body))));
+        if(!('distLog' in body) && Array.isArray(keepDist)) state.distLog = keepDist;
         selected.partId=null; selected.chapterId=null; selected.sectionId=null;
         recomputeNumbers();
         await refreshSnaps();
@@ -19704,7 +19828,7 @@ const app = createApp({
     setInterval(async ()=>{
       try{
         if(!state.parts.length) return;
-        const sig = String(JSON.stringify(state).length);
+        const sig = hashStr(JSON.stringify(Vue.toRaw(state)));    // 글자 수만 보면 같은 길이로 고친 것(오타 수정)을 놓친다
         if(sig === lastSnapSig) return;
         await snapCreate(state, '자동 저장', true, currentBookId.value);
         lastSnapSig = sig;
@@ -22372,7 +22496,12 @@ window.addEventListener('mousedown', flushAllEditables, true);
 window.addEventListener('keydown', e=>{
   if(e.ctrlKey || e.metaKey || e.altKey || ['Enter','Tab','Backspace','Delete','Escape','F9'].includes(e.key)) flushAllEditables();
 }, true);
-window.addEventListener('beforeunload', flushAllEditables);
+window.addEventListener('beforeunload', ev=>{
+  const typing = EDIT_PENDING.size > 0;
+  flushAllEditables();
+  // 방금 친 글이 아직 저장 전이면(자동저장은 쉼 0.9초 뒤에 비동기로 돈다) 닫기 전에 한 번 묻는다
+  if(typing || (window.__keeaUnsaved && window.__keeaUnsaved())){ ev.preventDefault(); ev.returnValue = ''; }
+});
 document.addEventListener('visibilitychange', flushAllEditables);
 function editableInput(el, ev, doit){
   if(ev && ev.isTrusted){
