@@ -5853,18 +5853,38 @@ function classifySkeleton(T,sk){
   const lk=Object.values(legs);if(lk.length===2){const a=lk[0],b=lk[1];legs.R=W(a[0]).x<W(b[0]).x?a:b;legs.L=legs.R===a?b:a;}
   return {chest:chest,head:head,arms:arms,legs:legs,pelvis:pelvis,root:bones[0]};
 }
+/* ── 뼈대 모델의 실제 크기·자리 ──
+   스킨 메시는 자기 노드의 배율을 무시하고 뼈 기준으로 그려집니다. Meshy 리깅 파일은 Armature·메시 노드 배율이 0.01 인데
+   정점은 m 단위라, 노드 배율로 재면 1.6cm 짜리로 보여 140배로 커져 버립니다. 그래서 정점을 뼈로 옮긴 실제 위치로 잽니다. */
+function skinRestMatrix(T,sk){             // 쉬는 자세에서 정점(메시 좌표) → 실제로 그려지는 세계 좌표
+  sk.updateMatrixWorld(true);
+  const b=sk.skeleton.bones[0];
+  return new T.Matrix4().copy(sk.matrixWorld).multiply(sk.bindMatrixInverse).multiply(b.matrixWorld).multiply(sk.skeleton.boneInverses[0]).multiply(sk.bindMatrix);
+}
+function glbBox(T,root){
+  root.updateMatrixWorld(true);
+  const box=new T.Box3(),v=new T.Vector3();
+  root.traverse(o=>{
+    if(!o.isMesh||!o.geometry||!o.geometry.attributes.position)return;
+    if(o.isSkinnedMesh&&o.skeleton&&o.geometry.attributes.skinIndex){
+      const P=o.geometry.attributes.position,step=Math.max(1,Math.floor(P.count/20000));
+      for(let i=0;i<P.count;i+=step){o.boneTransform(i,v);v.applyMatrix4(o.matrixWorld);box.expandByPoint(v);}
+    }else{if(!o.geometry.boundingBox)o.geometry.computeBoundingBox();box.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld));}
+  });
+  return box;
+}
 /* 모델 텍스처에서 입 찾기: 머리 앞면 가운데의 어두운 점들 중 코 아래 무리 */
 function glbFindMouth(T,sk,S){
   const map=sk.material.map;if(!map||!map.image)return null;
   const im=map.image,k=Math.min(1,1024/Math.max(im.width,im.height)),w=Math.round(im.width*k),h=Math.round(im.height*k);
   const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d');x.drawImage(im,0,0,w,h);const px=x.getImageData(0,0,w,h).data;
   const g=sk.geometry,P=g.attributes.position,U=g.attributes.uv;if(!U)return null;
-  const box=new T.Box3().setFromObject(sk),sz=box.getSize(new T.Vector3());
+  const box=glbBox(T,sk),sz=box.getSize(new T.Vector3()),M=skinRestMatrix(T,sk);
   const hy=S.head[0].getWorldPosition(new T.Vector3()).y,v=new T.Vector3();
   let zmax=-1e9;const cand=[];
-  for(let i=0;i<P.count;i++){v.fromBufferAttribute(P,i).applyMatrix4(sk.matrixWorld);if(v.y>hy){zmax=Math.max(zmax,v.z);cand.push(i);}}
+  for(let i=0;i<P.count;i++){v.fromBufferAttribute(P,i).applyMatrix4(M);if(v.y>hy){zmax=Math.max(zmax,v.z);cand.push(i);}}
   const hx=S.head[0].getWorldPosition(new T.Vector3()).x,dark=[],light=[];
-  cand.forEach(i=>{v.fromBufferAttribute(P,i).applyMatrix4(sk.matrixWorld);
+  cand.forEach(i=>{v.fromBufferAttribute(P,i).applyMatrix4(M);
     if(v.z<zmax-0.22*sz.z||Math.abs(v.x-hx)>0.08*sz.x)return;
     const qx=Math.min(w-1,Math.round(U.getX(i)*w)),qy=Math.min(h-1,Math.round(U.getY(i)*h)),q=(qy*w+qx)*4,l=0.299*px[q]+0.587*px[q+1]+0.114*px[q+2];
     (l<75?dark:light).push([v.x,v.y,v.z,px[q],px[q+1],px[q+2]]);});
@@ -5911,7 +5931,7 @@ function glbClipRoles(T,sc,clips,S){
    둘 사이를 오갈 때는 뼈마다 부드럽게 섞어 튀지 않게 합니다. */
 function glbSkeletonKia(T,gltf,sk,rig,imgs){
   const sc=gltf.scene;sc.updateMatrixWorld(true);
-  const box=new T.Box3().setFromObject(sc),sz=box.getSize(new T.Vector3()),c=box.getCenter(new T.Vector3());
+  const box=glbBox(T,sc),sz=box.getSize(new T.Vector3()),c=box.getCenter(new T.Vector3());
   let S=null,sErr=null;try{S=classifySkeleton(T,sk);}catch(e){sErr=e;}
   const CL=glbClipRoles(T,sc,gltf.animations,S);
   if(!S&&!CL.usable.length)throw sErr||new Error('뼈대를 읽지 못했습니다');
@@ -5926,7 +5946,7 @@ function glbSkeletonKia(T,gltf,sk,rig,imgs){
     if(mf&&imgs&&imgs.mouth&&T.DecalGeometry){
       const MB=[270,340,410,440],mc=document.createElement('canvas');mc.width=280;mc.height=200;
       const mt=new T.CanvasTexture(mc);mt.encoding=T.sRGBEncoding;
-      const plain=new T.Mesh(sk.geometry,sk.material);plain.matrixWorld.copy(sk.matrixWorld);plain.matrixAutoUpdate=false;
+      const plain=new T.Mesh(sk.geometry,sk.material);plain.matrixWorld.copy(skinRestMatrix(T,sk));plain.matrixAutoUpdate=false;   // 그려지는 자리 그대로
       const dw=mf.w*1.55,dh=dw*mc.height/mc.width;
       mouthDecal=new T.Mesh(new T.DecalGeometry(plain,mf.pos,new T.Euler(0,0,0),new T.Vector3(dw,dh,0.25*sz.z)),
         new T.MeshStandardMaterial({map:mt,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-4,roughness:.85}));
@@ -6574,10 +6594,11 @@ Object.assign(Studio,{
    스튜디오가 아닌 장면에서도 3D 모델(GLB) 캐릭터를 오른쪽 아래에 세웁니다 (장면별 캐릭터 '3D 모델').
    투명 배경으로 따로 그려 슬라이드 위에 얹고, 2D 리그와 같은 몸짓 값(설명·가리키기·손 흔들기…)으로 움직입니다. */
 function flat3dPlace(d,W,H){
-  const s=W/1920,h=Math.round(H*Math.min(0.62,((d.char&&d.char.size)||0.42)*1.12)),w=Math.round(h*0.72);
-  const x=Math.round(W-16*s-w),y=H-h;
+  // 그림 폭은 넉넉히 (화면을 가리키는 손끝이 잘리지 않게), 몸은 가운데
+  const s=W/1920,h=Math.round(H*Math.min(0.62,((d.char&&d.char.size)||0.42)*1.12)),w=Math.round(h*0.92);
+  const x=Math.round(W-16*s-w+h*0.12),y=H-h;
   // 글 배치가 피해 갈 자리: 몸이 있는 가운데 부분
-  return {x:x,y:y,w:w,h:h,box:{x:Math.round(x+w*0.14),y:Math.round(y+h*0.05),w:Math.round(w*0.72),h:Math.round(h*0.95)}};
+  return {x:x,y:y,w:w,h:h,box:{x:Math.round(x+w*0.2),y:Math.round(y+h*0.05),w:Math.round(w*0.6),h:Math.round(h*0.95)}};
 }
 function makeFlat3D(){
   return {ok:false,r:null,k:null,place:null,
