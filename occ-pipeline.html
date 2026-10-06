@@ -3034,6 +3034,8 @@ function audioCutEditor(s,onApply){
       '<button class="btn small ghost" data-c="clear">편집 모두 지우기</button></div>'+
     '<canvas data-c="wave" width="1400" height="150" style="width:100%;height:118px;cursor:crosshair;border-radius:6px;background:var(--surface-2);display:block;touch-action:none;"></canvas>'+
     '<div class="msg" data-c="info" style="margin-top:5px;font-size:12px;">조각 소리를 불러오는 중…</div>'+
+    '<div data-c="text" style="margin-top:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);font-size:14px;line-height:1.9;max-height:220px;overflow:auto;user-select:text;cursor:text;"></div>'+
+    '<div class="note" style="margin:3px 0 0;font-size:11.5px;">글자를 끌어서 고르면 그 소리가 선택됩니다 → ✂ 또는 Delete 로 잘라내기 · 글자를 누르면 그 위치로 · 잘린 글자는 줄이 그어집니다. 글자 위치는 소리 크기로 어림한 것이라 조금 어긋날 수 있으니 재생해 확인하세요.</div>'+
     '<div data-c="gaps" style="display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:8px;"></div>'+
     '<div class="row-actions" style="margin-top:9px;"><button class="btn small primary" data-c="apply">적용 (이어 붙이기)</button>'+
       '<span class="note" style="margin:0;font-size:11.5px;">끌어서 구간 선택 · 클릭해서 재생 위치 · Delete 로 잘라내기 · 스페이스로 재생/멈춤</span></div>';
@@ -3041,7 +3043,7 @@ function audioCutEditor(s,onApply){
   let pcm=null,tl=null,sel=null,cursor=0,undo=[],ac=null,src=null,playAt=0,playFrom=0,playTo=0,raf=0;
   const snap=()=>JSON.stringify(P.map(p=>[p.cuts||[],p.gapAfter==null?null:p.gapAfter]));
   const restore=j=>JSON.parse(j).forEach((x,i)=>{P[i].cuts=x[0];if(x[1]==null)delete P[i].gapAfter;else P[i].gapAfter=x[1];});
-  const changed=()=>{s.audioStale=true;persist();build();draw();gapsUI();};
+  const changed=()=>{s.audioStale=true;persist();build();draw();gapsUI();textMarks();};
   // 편집이 적용된 시간표: 남긴 조각 소리(pieces)와 쉼(gaps)을 차례로
   function build(){
     const pieces=[],gaps=[],out=[];let t=0;
@@ -3058,6 +3060,63 @@ function audioCutEditor(s,onApply){
     info.className='msg';info.textContent='길이 '+t.toFixed(1)+'초'+(cut?' · 잘라낸 곳 '+cut+'군데':'')+(Math.abs(orig-t)>0.05?' · 원래보다 '+(t<orig?'−':'+')+Math.abs(orig-t).toFixed(1)+'초':'')+
       (s.audioStale?' · 적용 전 (영상에는 아직 예전 음성)':'');
   }
+  // ── 글로 고르기: 조각마다 읽은 글을 음절로 나눠 원본 소리 위 시각을 어림 (립싱크와 같은 방식, 10ms 단위)
+  let chars=null;                                       // chars[i] = [{t0,t1,el}] 원본 초
+  function partChars(i){
+    const p=P[i],d=pcm[i],txt=String(p.read||p.disp||''),fps=100,win=Math.round(TTS_SR/fps),n=Math.ceil(d.length/win),env=new Float32Array(n);
+    for(let f=0;f<n;f++){let e=0,c=0;for(let j=f*win;j<Math.min(d.length,(f+1)*win);j+=3){e+=d[j]*d[j];c++;}env[f]=Math.sqrt(e/Math.max(1,c));}
+    const srt=Array.from(env).sort((a,b)=>a-b),ref=Math.max(1e-5,srt[Math.floor(srt.length*0.95)]||0);for(let f=0;f<n;f++)env[f]=Math.min(1.3,env[f]/ref);
+    const full=d.length/TTS_SR,tr=p.trim||[0,full],syl=lipSyllables(txt);
+    const al=sylAlign(env,Math.floor(tr[0]*fps),Math.min(n,Math.ceil(tr[1]*fps)),syl.length);
+    const out=[];for(let c=0;c<txt.length;c++)out.push({ch:txt[c],t0:null,t1:null});
+    syl.forEach((y,k)=>{const sp=al.spans[k];if(!sp)return;out[y.ci].t0=sp[0]/fps;out[y.ci].t1=sp[1]/fps;});
+    let last=tr[0];out.forEach(o=>{if(o.t0==null){o.t0=o.t1=last;}else last=o.t1;});   // 띄어쓰기·문장부호: 앞 음절 끝
+    return out;
+  }
+  function buildText(){
+    const box=q('text');box.innerHTML='';chars=[];
+    P.forEach(function(p,i){
+      const row=document.createElement('div');row.dataset.p=i;row.style.cssText='margin:0 0 2px;';
+      const no=document.createElement('b');no.textContent=(i+1)+' ';no.style.cssText='color:var(--text-dim);font-size:12px;user-select:none;';row.appendChild(no);
+      const cs=partChars(i);
+      cs.forEach((o,c)=>{const sp=document.createElement('span');sp.textContent=o.ch;sp.dataset.p=i;sp.dataset.c=c;o.el=sp;row.appendChild(sp);});
+      if(p.read&&p.disp&&p.read!==p.disp){const r=document.createElement('span');r.textContent='  (읽는 글)';r.style.cssText='color:var(--text-dim);font-size:11px;user-select:none;';row.appendChild(r);}
+      chars.push(cs);box.appendChild(row);
+    });
+    textMarks();
+  }
+  function textMarks(){                                 // 잘린 글자는 줄 긋기
+    if(!chars||!pcm)return;
+    chars.forEach((cs,i)=>{const keep=partKeep(P[i],pcm[i].length/TTS_SR);
+      cs.forEach(o=>{const m=(o.t0+o.t1)/2,on=o.t1>o.t0?keep.some(k=>m>=k[0]&&m<k[1]):true;
+        o.el.style.textDecoration=on?'':'line-through';o.el.style.opacity=on?'':'.45';});});
+  }
+  // 원본 시각 ↔ 편집본 시각
+  function srcToD(i,ts,end){
+    const L=tl.pieces.filter(pc=>pc.i===i);if(!L.length)return null;
+    for(const pc of L)if(ts>=pc.s0-1e-4&&ts<=pc.s1+1e-4)return pc.d0+Math.min(pc.s1,Math.max(pc.s0,ts))-pc.s0;
+    if(!end){const nx=L.find(pc=>pc.s0>ts);return nx?nx.d0:L[L.length-1].d1;}   // 잘린 곳에서 시작 → 그 뒤 첫 남은 곳
+    let pv=null;L.forEach(pc=>{if(pc.s1<ts)pv=pc;});return pv?pv.d1:L[0].d0;      // 잘린 곳에서 끝 → 그 앞 마지막 남은 곳
+  }
+  function dToSrc(t){const pc=tl.pieces.find(x=>t>=x.d0&&t<x.d1);return pc?{i:pc.i,ts:pc.s0+(t-pc.d0)}:null;}
+  let hiEl=null;
+  function textHi(t){
+    if(!chars)return;const r=dToSrc(t);let el=null;
+    if(r){const o=chars[r.i].find(x=>x.t1>x.t0&&r.ts>=x.t0&&r.ts<x.t1);if(o)el=o.el;}
+    if(el===hiEl)return;if(hiEl)hiEl.style.background='';hiEl=el;if(el){el.style.background='rgba(240,178,60,.45)';}
+  }
+  q('text').addEventListener('mouseup',function(ev){
+    if(!tl||!chars)return;
+    const S=window.getSelection(),spanOf=n=>{const e=n&&(n.nodeType===1?n:n.parentElement);return e&&e.closest?e.closest('span[data-c]'):null;};
+    if(!S||S.isCollapsed){const sp=ev.target.closest&&ev.target.closest('span[data-c]');if(!sp)return;
+      const o=chars[+sp.dataset.p][+sp.dataset.c],d0=srcToD(+sp.dataset.p,o.t0,false);if(d0!=null){cursor=d0;sel=null;draw();textHi(cursor);}return;}
+    let a=spanOf(S.anchorNode),b=spanOf(S.focusNode);if(!a||!b)return;
+    const key=x=>(+x.dataset.p)*1e6+(+x.dataset.c);if(key(a)>key(b)){const x=a;a=b;b=x;}
+    const oa=chars[+a.dataset.p][+a.dataset.c],ob=chars[+b.dataset.p][+b.dataset.c];
+    const A=srcToD(+a.dataset.p,oa.t0,false),B=srcToD(+b.dataset.p,ob.t1,true);
+    if(A!=null&&B!=null&&B-A>0.01){sel=[A,B];cursor=A;draw();el.focus({preventScroll:true});
+      info.className='msg';info.textContent='고른 글: "'+S.toString().replace(/\s+/g,' ').slice(0,40)+'" · '+(B-A).toFixed(2)+'초 — ✂ 또는 Delete 로 잘라내기';}
+  });
   function css(v,f){const x=getComputedStyle(document.documentElement).getPropertyValue(v).trim();return x||f;}
   function draw(){
     const x=cv.getContext('2d'),W=cv.width,H=cv.height;x.clearRect(0,0,W,H);
@@ -3081,6 +3140,7 @@ function audioCutEditor(s,onApply){
     if(sel){x.fillStyle='rgba(226,87,76,.25)';x.fillRect(sel[0]*T2X,0,(sel[1]-sel[0])*T2X,H);x.strokeStyle='#e2574c';x.lineWidth=2;x.strokeRect(sel[0]*T2X,1,(sel[1]-sel[0])*T2X,H-2);}
     const ph=src?playFrom+(ac.currentTime-playAt):cursor;
     x.strokeStyle=src?txt:dim;x.lineWidth=2;x.beginPath();x.moveTo(ph*T2X,0);x.lineTo(ph*T2X,H);x.stroke();
+    if(src)textHi(ph);
   }
   function gapsUI(){
     const g=q('gaps');g.innerHTML='';
@@ -3099,7 +3159,7 @@ function audioCutEditor(s,onApply){
     const A=sel[0],B=sel[1];
     tl.pieces.forEach(pc=>{const a=Math.max(A,pc.d0),b=Math.min(B,pc.d1);if(b-a>0.002)addCut(P[pc.i],pc.s0+(a-pc.d0),pc.s0+(b-pc.d0));});
     tl.gaps.forEach(g=>{const a=Math.max(A,g.d0),b=Math.min(B,g.d1);if(b-a>0.002)P[g.i].gapAfter=Math.max(0,+(partGap(P,g.i)-(b-a)).toFixed(3));});
-    cursor=A;sel=null;changed();
+    cursor=A;sel=null;try{window.getSelection().removeAllRanges();}catch(e){}changed();
   }
   // 긴 쉼 줄이기: 조각 안에서 소리가 거의 없는 구간이 L초를 넘으면 K초만 남김 (앞뒤로 반씩)
   function shortenPauses(){
@@ -3148,7 +3208,7 @@ function audioCutEditor(s,onApply){
   q('clear').addEventListener('click',()=>{undo.push(snap());P.forEach(p=>{p.cuts=[];delete p.gapAfter;});changed();});
   q('apply').addEventListener('click',async()=>{stop();await onApply();build();draw();});
   (async function(){
-    try{pcm=[];for(const p of P)pcm.push(await partPCM(p));build();draw();gapsUI();}
+    try{pcm=[];for(const p of P)pcm.push(await partPCM(p));build();draw();gapsUI();buildText();}
     catch(e){info.className='msg fail';info.textContent='조각 소리를 불러오지 못했습니다 — ComfyUI가 켜져 있는지 확인하세요 ('+e.message+')';}
   })();
   return el;
@@ -4679,17 +4739,29 @@ const LIP_JUNG=[['A',1],['E',.85],['A',.95],['E',.85],['A',.75],['E',.8],['A',.7
 // 숫자는 한국어로 읽는 첫 음절 모양 (영·일·이·삼·사·오·육·칠·팔·구)
 const LIP_DIGIT={'0':['A',.75,0,0],'1':['I',.65,0,0],'2':['I',.65,0,0],'3':['A',.95,0,1],'4':['A',.95,0,0],'5':['O',.8,0,0],'6':['U',.7,0,0],'7':['I',.65,0,0],'8':['A',.95,1,0],'9':['U',.7,0,0]};
 const LIP_LAT={a:'A',e:'E',i:'I',o:'O',u:'U',y:'I'};
+/* 일본어 가나: 그 글자의 모음 (작은 ゃゅょ 는 앞 글자 모음을 바꾸지 않고 건너뜀, ん·っ 는 다문 입) */
+const KANA_V='aaiiuueeooaaiiuueeooaaiiuueeooaaiixuueeooaiueoaaaiiiuuueeeoooaiueoaauuooaiueoaaieonuae';                // ぁ(3041) ~ ゖ(3096) 의 모음 (x: っ, n: ん)
+const KANA_SMALL=[0x3041,0x3043,0x3045,0x3047,0x3049,0x3083,0x3085,0x3087,0x308E,0x3095,0x3096];
+function kanaVowel(c){
+  const k=c>=0x30A1&&c<=0x30F6?c-0x60:c;               // 가타카나 → 히라가나
+  if(k<0x3041||k>0x3096||KANA_SMALL.indexOf(k)>=0)return null;   // 작은 글자·장음은 앞 음절에 붙임
+  const v=KANA_V[k-0x3041];
+  return v==='x'||v==='n'?'M':v.toUpperCase();
+}
+const KANA_LIP=k=>(k>=0x307E&&k<=0x3082)||[0x3070,0x3071,0x3073,0x3074,0x3076,0x3077,0x3079,0x307A,0x307C,0x307D].indexOf(k)>=0;   // ま·ば·ぱ 행: 입술 붙였다 엶
 // 모양별 입 그림 비율 [가로, 세로] — 'A'(크게 벌림)가 원래 벌린 입 그림
 const LIP_XY={A:[1,1],E:[1.12,.62],I:[1.18,.36],O:[.78,.88],U:[.58,.55],M:[1,0]};
+/* 글자 → 음절 (ci: 그 음절의 글자 번호) */
 function lipSyllables(text){
   const s=String(text||''),out=[];
   for(let i=0;i<s.length;i++){
     const c=s.charCodeAt(i),ch=s[i];
     if(c>=0xAC00&&c<=0xD7A3){
       const v=c-0xAC00,cho=Math.floor(v/588),jung=Math.floor((v%588)/28),jong=v%28,J=LIP_JUNG[jung];
-      out.push({s:J[0],a:J[1],on:cho===6||cho===7||cho===8||cho===17,off:jong===16||jong===17||jong===18||jong===26||jong===10||jong===14});
-    }else if(LIP_DIGIT[ch]){const D=LIP_DIGIT[ch];out.push({s:D[0],a:D[1],on:!!D[2],off:!!D[3]});}
-    else{const L=LIP_LAT[ch.toLowerCase()];if(L&&!(i>0&&LIP_LAT[s[i-1].toLowerCase()]))out.push({s:L,a:.8,on:false,off:false});}
+      out.push({s:J[0],a:J[1],on:cho===6||cho===7||cho===8||cho===17,off:jong===16||jong===17||jong===18||jong===26||jong===10||jong===14,ci:i});
+    }else if(LIP_DIGIT[ch]){const D=LIP_DIGIT[ch];out.push({s:D[0],a:D[1],on:!!D[2],off:!!D[3],ci:i});}
+    else if(c>=0x3041&&c<=0x30F6){const V=kanaVowel(c);if(V)out.push({s:V,a:.85,on:KANA_LIP(c>=0x30A1?c-0x60:c),off:false,ci:i});}
+    else{const L=LIP_LAT[ch.toLowerCase()];if(L&&!(i>0&&LIP_LAT[s[i-1].toLowerCase()]))out.push({s:L,a:.8,on:false,off:false,ci:i});}
   }
   return out;
 }
@@ -4703,35 +4775,45 @@ function lipSegs(s,dur){
   }
   return [{t0:0,t1:dur,text:(s&&(s.narration||''))||''}];
 }
+/* 음절 m개를 [f0,f1) 프레임의 소리 덩어리에 얹기: 덩어리마다 길이에 비례한 수, 경계는 고르게 나눈 자리 근처에서 소리가 가장 작은 곳.
+   반환 runs(덩어리) · cnt(덩어리별 음절 수) · spans([시작,끝,덩어리 번호] — 음절 순서대로) */
+function sylAlign(env,f0,f1,m){
+  const VTH=0.13,runs=[];let a=-1,gap=0;               // 소리 덩어리 (2프레임 이하 틈은 이어 붙임)
+  for(let f=f0;f<f1;f++){
+    if(env[f]>VTH){if(a<0)a=f;gap=0;}
+    else if(a>=0){gap++;if(gap>2){runs.push([a,f-gap+1]);a=-1;gap=0;}}
+  }
+  if(a>=0)runs.push([a,f1-gap]);
+  const V=runs.reduce((x,r)=>x+r[1]-r[0],0),spans=[];
+  if(!V||!m)return {runs:runs,cnt:runs.map(()=>0),spans:spans};
+  const q=runs.map(r=>m*(r[1]-r[0])/V),cnt=q.map(Math.floor);let rem=m-cnt.reduce((x,y)=>x+y,0);
+  q.map((x,i)=>[x-cnt[i],i]).sort((x,y)=>y[0]-x[0]).forEach(z=>{if(rem>0){cnt[z[1]]++;rem--;}});
+  runs.forEach((r,ri)=>{
+    const L=r[1]-r[0],k=cnt[ri];if(!k)return;
+    const b=[r[0]];
+    for(let j=1;j<k;j++){
+      const c=r[0]+j*L/k,w=Math.max(1,Math.floor(L/k*0.35));let best=Math.round(c),bv=1e9;
+      for(let f=Math.max(b[b.length-1]+1,Math.round(c-w));f<=Math.min(r[1]-1,Math.round(c+w));f++)if(env[f]<bv){bv=env[f];best=f;}
+      b.push(Math.max(b[b.length-1]+1,best));
+    }
+    b.push(r[1]);
+    for(let j=0;j<k;j++)spans.push([b[j],Math.max(b[j]+1,b[j+1]),ri]);
+  });
+  return {runs:runs,cnt:cnt,spans:spans};
+}
 function lipTrack(env,fps,segs){
-  const n=env.length,vis=new Array(n).fill(null),amt=new Float32Array(n),sx=new Float32Array(n),sy=new Float32Array(n),VTH=0.13;
+  const n=env.length,vis=new Array(n).fill(null),amt=new Float32Array(n),sx=new Float32Array(n),sy=new Float32Array(n);
   let o=0;for(let i=0;i<n;i++){const g=Math.max(0,Math.min(1,(env[i]-0.1)/0.65));o+=(g-o)*(g>o?0.75:0.5);amt[i]=o;}
   let any=false;
   for(const sg of (segs||[])){
     const syl=lipSyllables(sg.text);if(!syl.length)continue;
     const f0=Math.max(0,Math.floor(sg.t0*fps)),f1=Math.min(n,Math.ceil(sg.t1*fps));
-    const runs=[];let a=-1,gap=0;                      // 소리 덩어리 (2프레임 이하 틈은 이어 붙임)
-    for(let f=f0;f<f1;f++){
-      if(env[f]>VTH){if(a<0)a=f;gap=0;}
-      else if(a>=0){gap++;if(gap>2){runs.push([a,f-gap+1]);a=-1;gap=0;}}
-    }
-    if(a>=0)runs.push([a,f1-gap]);
-    const V=runs.reduce((x,r)=>x+r[1]-r[0],0);if(!V)continue;any=true;
-    const q=runs.map(r=>syl.length*(r[1]-r[0])/V),cnt=q.map(Math.floor);let rem=syl.length-cnt.reduce((x,y)=>x+y,0);
-    q.map((x,i)=>[x-cnt[i],i]).sort((x,y)=>y[0]-x[0]).forEach(z=>{if(rem>0){cnt[z[1]]++;rem--;}});
+    const al=sylAlign(env,f0,f1,syl.length);if(!al.spans.length)continue;any=true;
     let si=0,prev=syl[0];const cl=Math.max(1,Math.round(0.06*fps));
-    runs.forEach((r,ri)=>{
-      const L=r[1]-r[0],m=cnt[ri];
-      if(!m){for(let f=r[0];f<r[1];f++)vis[f]=prev.s;return;}   // 음절이 안 돌아온 짧은 덩어리: 앞 모양 그대로
-      const b=[r[0]];                                    // 경계: 고르게 나눈 자리 근처에서 소리가 가장 작은 곳
-      for(let j=1;j<m;j++){
-        const c=r[0]+j*L/m,w=Math.max(1,Math.floor(L/m*0.35));let best=Math.round(c),bv=1e9;
-        for(let f=Math.max(b[b.length-1]+1,Math.round(c-w));f<=Math.min(r[1]-1,Math.round(c+w));f++)if(env[f]<bv){bv=env[f];best=f;}
-        b.push(Math.max(b[b.length-1]+1,best));
-      }
-      b.push(r[1]);
-      for(let j=0;j<m;j++){
-        const y=syl[si++]||prev;prev=y;const A=b[j],B=Math.max(A+1,b[j+1]);
+    al.runs.forEach((r,ri)=>{
+      if(!al.cnt[ri]){for(let f=r[0];f<r[1];f++)vis[f]=prev.s;return;}   // 음절이 안 돌아온 짧은 덩어리: 앞 모양 그대로
+      for(let j=0;j<al.cnt[ri];j++){
+        const sp=al.spans[si],y=syl[si++]||prev;prev=y;const A=sp[0],B=sp[1];
         for(let f=A;f<B&&f<n;f++){
           let v=y.s;
           if(B-A>cl+1&&((y.on&&f<A+cl)||(y.off&&f>=B-cl)))v='M';
@@ -5836,6 +5918,7 @@ const HtmlStage={host:null,dom:null,root:null,anims:[],ticks:[],key:'',css:'',sl
     this.dom.innerHTML='<style>'+css+'</style>';
     const r=document.createElement('div');r.className='hs'+(spec.rootClass?' '+spec.rootClass:'');r.innerHTML=spec.html;this.dom.appendChild(r);
     this.root=r;this.css=css;
+    if(spec.els)applyEls(r,spec.els);                  // 화면 편집기의 요소별 이동·크기·숨김 (배치 계산 전에)
     if(spec.after)spec.after(r);
     this.anims=spec.anims.map(function(a){
       const el=r.querySelector(a[0]);if(!el)return null;
@@ -5876,10 +5959,20 @@ const HtmlStage={host:null,dom:null,root:null,anims:[],ticks:[],key:'',css:'',sl
   /* 미리보기와 렌더가 동시에 무대를 쓰지 않도록 줄 세웁니다 */
   run(fn){const p=this.lock.then(fn,fn);this.lock=p.catch(()=>{});return p;}
 };
+/* 요소별 조정: {키(data-a): {dx,dy,k,hide}} — 키는 제목 tt · 항목 i0… · 메모 nt.
+   CSS 개별 변형(translate·scale)이라 등장 효과(transform)와 함께 겹쳐 적용됩니다 */
+function applyEls(root,els){
+  Object.keys(els||{}).forEach(function(k){
+    const a=els[k],el=root.querySelector('[data-a="'+k+'"]');if(!el||!a)return;
+    if(a.dx||a.dy)el.style.translate=(a.dx||0)+'px '+(a.dy||0)+'px';
+    if(a.k&&Math.abs(a.k-1)>0.001){el.style.scale=String(a.k);el.style.transformOrigin='0 50%';}   // 왼쪽 맞춤 글은 왼쪽을 기준으로 키움
+    if(a.hide)el.style.visibility='hidden';
+  });
+}
 /* 씬 하나를 HTML로 그려 캔버스에 올립니다. 반환: 그림 틀(1920 기준 좌표) */
 async function drawHtmlSlide(ctx,W,H,o,lt,st){
   const d=o.design,css=htmlCss(d);
-  const spec=htmlSpec(o);
+  const spec=htmlSpec(o);spec.els=o.adj&&o.adj.els||null;
   const key=JSON.stringify([o.layout,o.title,o.label,o.items,o.note,o.footerL,o.footerR,o.times,o.noteT,o.right,o.bottom,o.charTop,o.big,o.info,o.thinkStart,o.thinkLen,
     o.pen,o.band,o.fx3,o.tfx,o.grid,o.titlePos,o.dur,o.slotRect,o.adj,o.icons,o.cues,o.numOffset,o.logoBox,d.logoPos,d.logoH,o.cover?o.cover.length:0,
     d.bg,d.accent,d.text,d.sub,d.panel,d.font,d.palette,!!o.logo]);
@@ -10990,7 +11083,8 @@ async function openSceneEditor(u,si,s){
   const cur={title:s.title||'',note:s.boardNote||''};   // 바로 고치는 중인 글자
   const ad=Math.max(1,s.audioSec||estSec(s.narration)||3),dur=SEG_LEAD+ad+SEG_TAIL,cues=sceneCuesFor(s,SEG_LEAD,ad);
   let auto=revealPlan(items,s.boardNote,cues,0,SEG_LEAD,ad);
-  const e=JSON.parse(JSON.stringify(s.edit||{}));e.dx=e.dx||0;e.dy=e.dy||0;e.k=e.k||1;e.times=e.times||[];
+  const e=JSON.parse(JSON.stringify(s.edit||{}));e.dx=e.dx||0;e.dy=e.dy||0;e.k=e.k||1;e.times=e.times||[];e.els=e.els||{};
+  let mode='all',sel=null;                               // 옮기기: 내용 전체 / 하나씩
   let img=null;if(s.srcImage){try{img=await loadBitmap(s.srcImage,'input');}catch(x){}}
   const ov=document.createElement('div');ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
   const box=document.createElement('div');box.style.cssText='background:var(--surface);color:var(--text);border-radius:14px;padding:16px 18px;width:min(1400px,97vw);max-height:94vh;overflow:auto;';
@@ -11002,6 +11096,10 @@ async function openSceneEditor(u,si,s){
       '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;"><button class="btn small" data-b="play">▶ 재생</button><input type="range" data-b="t" min="0" max="'+f1(dur)+'" step="0.05" value="'+f1(dur)+'" style="flex:1;"><span data-b="tl" style="font-size:12px;min-width:70px;text-align:right;"></span></div></div>'+
     '<div style="flex:0 1 380px;min-width:300px;">'+
       '<div style="font-size:13px;font-weight:600;margin-bottom:6px;">위치·크기</div>'+
+      '<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;font-size:12px;"><button class="btn small primary" data-md="all">내용 전체</button><button class="btn small" data-md="one" title="제목·항목·메모를 하나씩 골라 옮기기·크기·숨기기">하나씩</button>'+
+        '<span data-b="selL" class="note" style="margin:0;"></span></div>'+
+      '<div data-b="oneRow" hidden style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap;"><button class="btn small" data-b="hide">숨기기</button><button class="btn small ghost" data-b="er">이 요소 되돌리기</button><button class="btn small ghost" data-b="ea">요소 조정 모두 지우기</button>'+
+        '<span class="note" style="margin:0;font-size:11.5px;">화살표 키로 조금씩 · Shift 는 크게</span></div>'+
       '<div style="display:flex;gap:8px;align-items:center;font-size:12px;">크기 <input type="range" data-b="k" min="0.7" max="1.3" step="0.01" value="'+e.k+'" style="flex:1;"><span data-b="kl">'+Math.round(e.k*100)+'%</span><button class="btn small ghost" data-b="pr">위치·크기 초기화</button></div>'+
       '<div style="font-size:13px;font-weight:600;margin:14px 0 6px;">등장 시각 (초) <span class="note" style="font-weight:400;">비우면 나레이션에 맞춰 자동</span></div>'+
       items.map((t,i)=>'<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;font-size:12px;"><span data-il="'+i+'" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(t)+'">'+(i+1)+'. '+esc(t)+'</span>'+
@@ -11018,10 +11116,15 @@ async function openSceneEditor(u,si,s){
     try{
       const t=parseFloat(tIn.value)||0,p=plan();tl.textContent=f1(t)+' / '+f1(dur)+'초';
       const o=htmlOpts(d,{design:d,layout:L,title:cur.title,label:'',items:items,note:cur.note,footerL:'',footerR:'',logo:d.logo||null,cbox:null,
-        times:p.times,noteT:p.noteT,cues:cues,adj:{dx:e.dx,dy:e.dy,k:e.k}},W,H);
+        times:p.times,noteT:p.noteT,cues:cues,adj:{dx:e.dx,dy:e.dy,k:e.k,els:e.els}},W,H);
       const slot=await HtmlStage.run(async()=>{const r=await drawHtmlSlide(ctx,W,H,o,t,{talking:t>=SEG_LEAD&&t<SEG_LEAD+ad});grabHits();return r;});
       if(slot&&img){ctx.save();ctx.beginPath();ctx.rect(slot.x*k,slot.y*k,slot.w*k,slot.h*k);ctx.clip();drawVisual(ctx,img,slot.x*k,slot.y*k,slot.w*k,slot.h*k,'none',0);ctx.restore();}
       if(L==='hotspot')await drawHotspotOverlay(ctx,W,H,d,{items:items,times:p.times},slot,t);
+      if(mode==='one'){                                  // 고른 요소 · 숨긴 요소 테두리
+        hits.forEach(h=>{const on=h.key===sel;if(!on&&!h.hidden)return;
+          ctx.save();ctx.lineWidth=on?3:1.5;ctx.setLineDash(on?[]:[6,5]);ctx.strokeStyle=on?(d.accent||'#4fc3f7'):'rgba(160,160,160,.9)';
+          ctx.strokeRect(h.x*k-4,h.y*k-4,h.w*k+8,h.h*k+8);ctx.restore();});
+      }
     }finally{busyP=false;if(again){again=false;paint();}}
   }
   // 글자 요소 자리 (1920 기준) — 두 번 눌러 바로 고치기에 씀
@@ -11034,7 +11137,8 @@ async function openSceneEditor(u,si,s){
       if(a!=='tt'&&a!=='nt'&&!m)return;
       if(parseFloat(getComputedStyle(el).opacity)<0.05)return;
       const b=el.getBoundingClientRect();if(b.width<2||b.height<2)return;
-      hits.push({a:m?'it':a,n:m?+m[1]:-1,text:el.textContent,x:b.left-R.left,y:b.top-R.top,w:b.width,h:b.height});
+      hits.push({a:m?'it':a,key:a,n:m?+m[1]:-1,text:el.textContent,x:b.left-R.left,y:b.top-R.top,w:b.width,h:b.height,
+        hidden:el.style.visibility==='hidden',inWrap:!!el.closest('.adj')});
     });
   }
   // 화면 요소 → 항목 번호 (흐름도·핫스팟처럼 글을 나눠 보여 주는 화면도 있어 글자로 맞춰 봄)
@@ -11093,14 +11197,51 @@ async function openSceneEditor(u,si,s){
     ta.addEventListener('mousedown',kv=>kv.stopPropagation());
     ed=ta;cw.appendChild(ta);ta.focus();ta.select();
   });
-  // 끌어서 옮기기 (1920 기준 좌표로 저장)
+  // 끌어서 옮기기 (1920 기준 좌표로 저장) — 내용 전체 또는 고른 요소 하나
+  const kIn=box.querySelector('[data-b=k]'),kL=box.querySelector('[data-b=kl]'),selL=box.querySelector('[data-b=selL]'),oneRow=box.querySelector('[data-b=oneRow]');
+  const elName=key=>key==='tt'?'제목':key==='nt'?'메모':/^i\d+$/.test(key)?'항목 '+(+key.slice(1)+1):key;
+  function showK(v){kIn.value=v;kL.textContent=Math.round(v*100)+'%';}
+  function updSel(){
+    box.querySelectorAll('[data-md]').forEach(b=>b.classList.toggle('primary',b.dataset.md===mode));
+    oneRow.hidden=mode!=='one';cv.style.cursor=mode==='one'?'pointer':'move';
+    const a=sel&&e.els[sel];
+    selL.textContent=mode==='one'?(sel?'고른 것: '+elName(sel)+(a&&a.hide?' (숨김)':''):'옮길 요소를 누르세요'):'';
+    box.querySelector('[data-b=hide]').textContent=a&&a.hide?'보이기':'숨기기';
+    box.querySelector('[data-b=hide]').disabled=box.querySelector('[data-b=er]').disabled=!sel;
+    showK(mode==='one'?(a&&a.k||1):e.k);
+  }
+  const elA=()=>(e.els[sel]=e.els[sel]||{});
+  function tidyEls(){Object.keys(e.els).forEach(x=>{const a=e.els[x];if(!a||(!a.dx&&!a.dy&&!a.hide&&(!a.k||Math.abs(a.k-1)<0.001)))delete e.els[x];});}
+  box.querySelectorAll('[data-md]').forEach(b=>b.onclick=()=>{mode=b.dataset.md;if(mode!=='one')sel=null;updSel();paint();});
   let drag=null;
-  cv.addEventListener('mousedown',ev=>{drag={x:ev.clientX,y:ev.clientY,dx:e.dx,dy:e.dy};});
+  cv.addEventListener('mousedown',ev=>{
+    if(mode==='one'){
+      const h=hitAt(ev);sel=h?h.key:null;updSel();paint();
+      if(h){const a=e.els[sel]||{};drag={x:ev.clientX,y:ev.clientY,dx:a.dx||0,dy:a.dy||0,el:true,f:h.inWrap?1/(e.k||1):1};}
+      return;
+    }
+    drag={x:ev.clientX,y:ev.clientY,dx:e.dx,dy:e.dy};});
   window.addEventListener('mousemove',ev=>{if(!drag)return;const r=cv.getBoundingClientRect(),sc=1920/r.width;
+    if(drag.el){if(!sel)return;const a=elA();a.dx=Math.round(drag.dx+(ev.clientX-drag.x)*sc*drag.f);a.dy=Math.round(drag.dy+(ev.clientY-drag.y)*sc*drag.f);paint();return;}
     e.dx=Math.round(drag.dx+(ev.clientX-drag.x)*sc);e.dy=Math.round(drag.dy+(ev.clientY-drag.y)*sc);paint();});
-  window.addEventListener('mouseup',()=>{drag=null;});
-  box.querySelector('[data-b=k]').addEventListener('input',ev=>{e.k=parseFloat(ev.target.value)||1;box.querySelector('[data-b=kl]').textContent=Math.round(e.k*100)+'%';paint();});
-  box.querySelector('[data-b=pr]').onclick=()=>{e.dx=0;e.dy=0;e.k=1;box.querySelector('[data-b=k]').value=1;box.querySelector('[data-b=kl]').textContent='100%';paint();};
+  window.addEventListener('mouseup',()=>{if(drag&&drag.el)tidyEls();drag=null;});
+  kIn.addEventListener('input',ev=>{const v=parseFloat(ev.target.value)||1;
+    if(mode==='one'){if(!sel)return;elA().k=v;}else e.k=v;showK(v);paint();});
+  box.querySelector('[data-b=pr]').onclick=()=>{
+    if(mode==='one'){if(sel){delete e.els[sel];updSel();paint();}return;}
+    e.dx=0;e.dy=0;e.k=1;showK(1);paint();};
+  box.querySelector('[data-b=hide]').onclick=()=>{if(!sel)return;const a=elA();a.hide=!a.hide;tidyEls();updSel();paint();};
+  box.querySelector('[data-b=er]').onclick=()=>{if(!sel)return;delete e.els[sel];updSel();paint();};
+  box.querySelector('[data-b=ea]').onclick=()=>{e.els={};updSel();paint();};
+  function onKey(ev){
+    if(!document.body.contains(ov)){window.removeEventListener('keydown',onKey);return;}
+    if(mode!=='one'||!sel||ed||isTextField(ev.target))return;
+    const st=ev.shiftKey?10:2,mv={ArrowLeft:[-st,0],ArrowRight:[st,0],ArrowUp:[0,-st],ArrowDown:[0,st]}[ev.key];
+    if(mv){ev.preventDefault();const a=elA();a.dx=(a.dx||0)+mv[0];a.dy=(a.dy||0)+mv[1];tidyEls();paint();}
+    else if(ev.key==='Delete'||ev.key==='Backspace'){ev.preventDefault();const a=elA();a.hide=!a.hide;tidyEls();updSel();paint();}
+  }
+  window.addEventListener('keydown',onKey);
+  updSel();
   box.querySelectorAll('[data-ti]').forEach(inp=>inp.addEventListener('input',()=>{const v=inp.value.trim();e.times[+inp.dataset.ti]=v===''?null:Math.max(0,Math.min(dur,parseFloat(v)||0));paint();}));
   const tn=box.querySelector('[data-tn]');if(tn)tn.addEventListener('input',()=>{const v=tn.value.trim();e.noteT=v===''?null:Math.max(0,parseFloat(v)||0);paint();});
   box.querySelectorAll('[data-now]').forEach(b=>b.onclick=()=>{const t=parseFloat(tIn.value)||0,w=b.dataset.now;
@@ -11118,6 +11259,7 @@ async function openSceneEditor(u,si,s){
     playing=false;if(ed)ed.blur();
     const out={};if(e.dx)out.dx=e.dx;if(e.dy)out.dy=e.dy;if(e.k&&Math.abs(e.k-1)>0.001)out.k=Math.round(e.k*100)/100;
     if(e.times.some(v=>v!=null))out.times=e.times.map(v=>v==null?null:Math.round(v*10)/10);if(e.noteT!=null)out.noteT=Math.round(e.noteT*10)/10;
+    tidyEls();if(Object.keys(e.els).length){out.els={};Object.keys(e.els).forEach(x=>{const a=e.els[x],o={};if(a.dx)o.dx=a.dx;if(a.dy)o.dy=a.dy;if(a.k&&Math.abs(a.k-1)>0.001)o.k=Math.round(a.k*100)/100;if(a.hide)o.hide=true;out.els[x]=o;});}
     if(Object.keys(out).length)s.edit=out;else delete s.edit;
     persist();ov.remove();renderScriptStageKeepScroll();};
   paint();
