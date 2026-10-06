@@ -2041,7 +2041,7 @@ function renderRail(){
 }
 
 function renderMain(){
-  histEnsure();
+  histEnsure();l10nSync();
   fullPrevStop();                                      // 장 전체 미리보기는 화면을 떠나면 정리 (스튜디오·3D 렌더러를 놓아줌)
   renderHeader();
   if(activeStageId==='overview'){main.innerHTML='';return renderOverview();}
@@ -2937,7 +2937,9 @@ function renderTtsCfgCard(){
     '<div class="form-grid">'+
       '<div class="field"><label>화자 (프리셋 이름)</label><input data-t="ttsSpeaker" value="'+esc(project.ttsSpeaker||'')+'" placeholder="예: Ryan"></div>'+
       '<div class="field"><label>언어</label><select data-t="ttsLang">'+
-        opt('Korean',project.ttsLang||'Korean','한국어')+opt('Auto',project.ttsLang,'자동')+'</select></div>'+
+        opt('Korean',project.ttsLang||'Korean','한국어')+opt('Auto',project.ttsLang,'자동')+
+        [['English','영어'],['Japanese','일본어'],['Chinese','중국어'],['Spanish','스페인어'],['French','프랑스어'],['German','독일어'],['Portuguese','포르투갈어'],['Russian','러시아어'],['Italian','이탈리아어']]
+          .map(x=>opt(x[0],project.ttsLang,x[1])).join('')+'</select></div>'+
       '<div class="field"><label>모델 크기</label><select data-t="ttsModel">'+
         opt('',project.ttsModel,'워크플로우 값')+opt('0.6B',project.ttsModel,'0.6B (빠름)')+opt('1.7B',project.ttsModel,'1.7B (품질)')+'</select></div>'+
       '<div class="field"><label>성별</label><select data-t="ttsCharacter">'+
@@ -4311,6 +4313,40 @@ function renderOverview(){
     '<p class="note" style="margin-top:6px;">자료실은 1단계 "참고자료"에서, 발음 사전과 음성 설정은 3단계(오디오)에서 관리합니다. 어느 차시에서 고쳐도 과정 전체에 반영됩니다.</p>'+
     '</div>';
   main.appendChild(sh);
+  renderLangCard();
+}
+/* 다른 언어판: 만들기 · 열기 */
+function renderLangCard(){
+  const lc=document.createElement('div');lc.className='card open';
+  const isLang=course.lang&&course.lang!=='ko',srcC=isLang?allCourses.find(c=>c.id===course.langOf):null;
+  const vers=allCourses.filter(c=>c.langOf===(isLang?course.langOf:course.id));
+  lc.innerHTML='<div class="card-head" style="cursor:default;"><h3>다른 언어판</h3><span class="sub">'+(isLang?'이 과정은 '+esc((langOf(course.lang)||{}).ko||course.lang)+'판입니다':'번역 → 그 언어 성우 → 자막·화면 문구까지')+'</span></div><div class="card-body">'+
+    (isLang?'<p class="note">원본 과정: <b>'+esc(srcC?srcC.name:'(지워짐)')+'</b>'+(srcC?' <button class="btn small" data-l="src">원본 열기</button>':'')+'. 번역을 새로 받으려면 원본 과정에서 다시 만드세요 (지금 판은 버전 기록에 남습니다).</p>'+
+      '<div class="row-actions" style="margin-top:6px;"><button class="btn small" data-l="labels" title="학습목표·N차시·정답과 해설 같은 화면의 고정 문구와 SCORM 플레이어 문구">고정 문구 다시 번역</button><span class="msg" data-l="msg"></span></div>':
+    '<div class="form-grid"><div class="field"><label>언어</label><select data-l="lang">'+LANGS.map(l=>'<option value="'+l.k+'">'+esc(l.ko+' · '+l.name)+(l.tts==='Auto'?' (성우 엔진 지원 확인)':'')+'</option>').join('')+'</select></div>'+
+      '<div class="field"><label>범위</label><select data-l="scope"><option value="one">이 차시만 ('+esc(lessonLabel(lessonSummary(project)))+')</option><option value="all">모든 차시 ('+course.lessons.length+'개)</option></select></div></div>'+
+    '<div class="row-actions" style="margin-top:8px;"><button class="btn small primary" data-l="go">언어판 만들기</button><span class="msg" data-l="msg"></span></div>'+
+    '<p class="note" style="margin-top:6px;">1단계 AI 텍스트 엔진으로 제목·대본·화면 문구·메모·평가 문제·정리를 번역해 <b>"과정명 (언어)"</b> 과정에 담습니다. 원본은 바뀌지 않습니다. '+
+      '디자인·캐릭터·배경음악은 복사되고 성우 언어는 그 언어로 바뀝니다. 음성은 3단계에서 새로 만들면 되고, 캐릭터 입모양은 새 음성에 맞춰 움직입니다. 녹화 강사 영상은 원래 목소리 그대로입니다.</p>')+
+    (vers.length?'<div style="margin-top:8px;font-size:13px;">만든 언어판: '+vers.map(c=>'<button class="btn small" data-open="'+c.id+'">'+esc(c.name)+' · 차시 '+(c.lessons||[]).length+'</button>').join(' ')+'</div>':'')+
+    '</div>';
+  main.appendChild(lc);
+  const q=s=>lc.querySelector('[data-l="'+s+'"]');
+  lc.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>switchToCourse(b.dataset.open));
+  if(q('src'))q('src').onclick=()=>switchToCourse(course.langOf);
+  if(q('labels'))q('labels').onclick=async function(){const m=q('msg');setBusy(true);m.className='msg';m.textContent='번역 중…';
+    try{await langLabels(course,langOf(course.lang));_l10n=null;l10nSync();persist();m.className='msg ok';m.textContent='고정 문구를 다시 번역했습니다';}
+    catch(e){m.className='msg fail';m.textContent=e.message;}finally{setBusy(false);}};
+  if(q('go'))q('go').onclick=async function(){
+    const m=q('msg'),L=langOf(q('lang').value),sc=q('scope').value;
+    if(!confirm((L?L.ko:'')+'판을 만듭니다 ('+(sc==='all'?'모든 차시':'이 차시')+'). AI 번역에 시간이 걸릴 수 있습니다. 계속할까요?'))return;
+    setBusy(true);m.className='msg';
+    try{const r=await makeLangVersion(L.k,sc,{isCancelled:()=>false,onStatus:t=>{m.textContent=t;},onProgress:f=>{m.textContent='번역 '+Math.round(f*100)+'%';}});
+      m.className='msg ok';m.textContent='「'+r.course.name+'」에 차시 '+r.lessons+'개를 담았습니다'+(r.videos?' · 녹화 강사 영상 장면 '+r.videos+'개는 원래 목소리':'');
+      const b=document.createElement('button');b.className='btn small';b.textContent='열기';b.onclick=()=>switchToCourse(r.course.id);m.appendChild(document.createTextNode(' '));m.appendChild(b);}
+    catch(e){m.className='msg fail';m.textContent=e.message;}
+    finally{setBusy(false);}
+  };
 }
 
 /* ══════════ 파일 입출력 ══════════ */
@@ -5972,7 +6008,7 @@ function applyEls(root,els){
 /* 씬 하나를 HTML로 그려 캔버스에 올립니다. 반환: 그림 틀(1920 기준 좌표) */
 async function drawHtmlSlide(ctx,W,H,o,lt,st){
   const d=o.design,css=htmlCss(d);
-  const spec=htmlSpec(o);spec.els=o.adj&&o.adj.els||null;
+  const spec=htmlSpec(o);spec.els=o.adj&&o.adj.els||null;if(_l10n)spec.html=l10nText(spec.html);
   const key=JSON.stringify([o.layout,o.title,o.label,o.items,o.note,o.footerL,o.footerR,o.times,o.noteT,o.right,o.bottom,o.charTop,o.big,o.info,o.thinkStart,o.thinkLen,
     o.pen,o.band,o.fx3,o.tfx,o.grid,o.titlePos,o.dur,o.slotRect,o.adj,o.icons,o.cues,o.numOffset,o.logoBox,d.logoPos,d.logoH,o.cover?o.cover.length:0,
     d.bg,d.accent,d.text,d.sub,d.panel,d.font,d.palette,!!o.logo]);
@@ -9460,6 +9496,133 @@ async function zipStore(files){
 }
 function xesc(t){return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
+/* ══════════ 다국어판 ══════════
+   지금 과정의 차시를 AI 텍스트 엔진으로 번역해 "과정명 (언어)" 과정에 담습니다 (원본은 그대로).
+   성우 언어를 그 언어로 바꾸고, 화면·PPT·SCORM 플레이어의 고정 문구(학습목표·N차시·진도 …)도 번역해 둡니다.
+   음성은 새로 만들어야 하고, 입모양은 새 음성에 맞춰 자동으로 움직입니다. */
+const LANGS=[
+  {k:'en',name:'English',ko:'영어',tts:'English'},{k:'ja',name:'日本語',ko:'일본어',tts:'Japanese'},{k:'zh',name:'中文',ko:'중국어',tts:'Chinese'},
+  {k:'es',name:'Español',ko:'스페인어',tts:'Spanish'},{k:'fr',name:'Français',ko:'프랑스어',tts:'French'},{k:'de',name:'Deutsch',ko:'독일어',tts:'German'},
+  {k:'pt',name:'Português',ko:'포르투갈어',tts:'Portuguese'},{k:'ru',name:'Русский',ko:'러시아어',tts:'Russian'},{k:'it',name:'Italiano',ko:'이탈리아어',tts:'Italian'},
+  {k:'vi',name:'Tiếng Việt',ko:'베트남어',tts:'Auto'},{k:'id',name:'Bahasa Indonesia',ko:'인도네시아어',tts:'Auto'},{k:'th',name:'ไทย',ko:'태국어',tts:'Auto'}];
+// 화면에 늘 나오는 한국어 문구 (긴 것부터 바꿈). {n} 은 숫자 자리
+const L10N_KEYS=['{n}차시','{n}장','알맞은 답을 고르세요','O, X로 답하세요','정답과 해설','정답 및 해설','합격 · 기준 충족','불합격 · 기준 초과','불합격 · 기준 미달','평가 · 정리','학습을 마칩니다','수고하셨습니다','다음 차시',
+  '생각 시간','측정 완료','학습목표','학습내용','학습정리','인트로','아웃트로','차시 전체','정답','문제','평가','근거','기준','이상','이하','측정','도입','마무리'];
+let _l10n=null,_l10nKeys=[];
+function l10nText(s){
+  if(!_l10n||typeof s!=='string'||!/[가-힣]/.test(s))return s;
+  const L=_l10n;
+  if(L['{n}차시'])s=s.replace(/(\d+)\s*차시/g,(m,n)=>L['{n}차시'].replace('{n}',n));
+  if(L['{n}장'])s=s.replace(/(\d+)\s*장(?![가-힣])/g,(m,n)=>L['{n}장'].replace('{n}',n));
+  for(const k of _l10nKeys)if(s.indexOf(k)>=0)s=s.split(k).join(L[k]);
+  return s;
+}
+const _c2d=CanvasRenderingContext2D.prototype,_ft=_c2d.fillText,_stx=_c2d.strokeText,_mt=_c2d.measureText;
+/* 지금 과정이 언어판이면 캔버스 글자·HTML 화면·PPT 의 고정 문구를 그 언어로 */
+function l10nSync(){
+  const on=course&&course.lang&&course.lang!=='ko'&&course.l10n?course.l10n:null;
+  if(on===_l10n)return;
+  _l10n=on;_l10nKeys=on?Object.keys(on).filter(k=>k.indexOf('{n}')<0&&on[k]&&/[가-힣]/.test(k)).sort((a,b)=>b.length-a.length):[];   // 긴 말부터
+  if(on){_c2d.fillText=function(x,...a){return _ft.call(this,l10nText(x),...a);};_c2d.strokeText=function(x,...a){return _stx.call(this,l10nText(x),...a);};
+    _c2d.measureText=function(x){return _mt.call(this,l10nText(x));};}
+  else{_c2d.fillText=_ft;_c2d.strokeText=_stx;_c2d.measureText=_mt;}
+  if(typeof HtmlStage!=='undefined')HtmlStage.key='';      // 화면 다시 그리기
+}
+function langOf(k){return LANGS.find(x=>x.k===k)||null;}
+/* 문자열 배열 번역 (JSON 배열로 주고받음 · 어긋나면 반으로 나눠 다시) */
+async function translateCall(arr,lang){
+  const sys='You are a professional translator of corporate e-learning (workplace safety and regulation) content. '+
+    'Translate every string in the JSON array from Korean into '+lang.name+'. Rules: keep the meaning and a polite, clear instructional tone; '+
+    'keep "\n" line breaks; keep {아이콘:...}, {n}, {과정}, {차시}, {제목}, {다음제목}, {다음차시} placeholders exactly as they are; '+
+    'keep numbers, units and law article numbers; translate names of laws naturally; never add notes. '+
+    'Output ONLY a JSON array of strings with exactly the same number of items in the same order.';
+  for(let attempt=0;attempt<2;attempt++){
+    const txt=await callText(sys,JSON.stringify(arr),Math.min(12000,400+arr.join('').length*5),true);
+    const m=String(txt||'').match(/\[[\s\S]*\]/);
+    try{const j=JSON.parse(m[0]);if(Array.isArray(j)&&j.length===arr.length)return j.map((x,k)=>keepTags(arr[k],String(x==null?'':x)));}catch(e){}
+  }
+  if(arr.length>1){const h=Math.ceil(arr.length/2);return (await translateCall(arr.slice(0,h),lang)).concat(await translateCall(arr.slice(h),lang));}
+  throw new Error('번역 결과를 읽지 못했습니다 — 텍스트 엔진 응답을 확인하세요');
+}
+function keepTags(src,out){const m=String(src).match(/^\{아이콘:[^}]+\}\s*/);if(m&&out.indexOf('{아이콘:')<0)out=m[0]+out;return out.trim();}
+async function translateStrings(list,lang,onTick){
+  const out=list.slice(),idx=[];list.forEach((s,i)=>{if(typeof s==='string'&&/[가-힣]/.test(s))idx.push(i);});
+  let i=0;
+  while(i<idx.length){
+    const b=[];let len=0;while(i<idx.length&&(len<2200||!b.length)&&b.length<40){b.push(idx[i]);len+=list[idx[i]].length;i++;}
+    const r=await translateCall(b.map(j=>list[j]),lang);b.forEach((j,k)=>{out[j]=r[k];});
+    if(onTick)onTick(i,idx.length);
+  }
+  return out;
+}
+/* 차시 기록 안의 번역할 글자 자리 */
+function lessonTextSlots(rec){
+  const S=[],add=(o,k)=>{if(o&&typeof o[k]==='string'&&o[k].trim())S.push([o,k]);};
+  add(rec.lesson,'title');add(rec.lesson,'objectives');
+  (rec.units||[]).forEach(u=>{add(u,'title');(u.scenes||[]).forEach(s=>{add(s,'title');add(s,'narration');add(s,'boardNote');(s.onScreen||[]).forEach((x,i)=>add(s.onScreen,i));});});
+  const P=rec.parts||{};
+  [P.opening,P.closing].forEach(pp=>pp&&(pp.scenes||[]).forEach(s=>{add(s,'title');add(s,'narration');}));
+  (P.quiz||[]).forEach(q=>{add(q,'question');add(q,'explain');(q.choices||[]).forEach((x,i)=>add(q.choices,i));});
+  (P.summary||[]).forEach((x,i)=>add(P.summary,i));
+  return S;
+}
+/* 화면·PPT·플레이어의 고정 문구 번역 (언어판 과정에 저장) */
+async function langLabels(cc,lang){
+  const uiKeys=Object.keys(SCORM_UI);
+  const tr=await translateStrings(L10N_KEYS.concat(uiKeys.map(k=>SCORM_UI[k])),lang);
+  cc.l10n={};L10N_KEYS.forEach((k,i)=>{cc.l10n[k]=tr[i];});
+  cc.l10nUi={};uiKeys.forEach((k,i)=>{cc.l10nUi[k]=tr[L10N_KEYS.length+i];});cc.l10nUi.subs=lang.name;
+}
+async function copyBlobs(ids){const map={};for(const id of ids){const b=await Store.getBlob(id).catch(()=>null);if(!b)continue;const nid=uid('m');await Store.putBlob(nid,b);map[id]=nid;}return map;}
+function remapIds(obj,map){let j=JSON.stringify(obj);Object.keys(map).forEach(a=>{j=j.split('"'+a+'"').join('"'+map[a]+'"');});return JSON.parse(j);}
+async function makeLangVersion(lk,scope,ui){
+  const lang=langOf(lk);if(!lang)throw new Error('언어를 고르세요');
+  if(course.lang&&course.lang!=='ko')throw new Error('번역은 원본(한국어) 과정에서 만드세요');
+  await flushSaveNow();
+  const src=course;
+  let cc=allCourses.find(c=>c.langOf===src.id&&c.lang===lk);
+  if(!cc){
+    ui.onStatus('과정 설정 복사 · 고정 문구 번역 중…');
+    let base=JSON.parse(JSON.stringify(src));delete base.lessons;
+    base=remapIds(base,await copyBlobs(await courseBlobIds([base])));   // 3D 모델·배경음악 등은 따로 복사 (한쪽에서 바꿔도 다른 쪽이 안 깨지게)
+    cc=normalizeCourse(Object.assign(base,{id:uid('c'),lessons:[],lang:lk,langOf:src.id,createdAt:Date.now(),updatedAt:Date.now(),dict:[],dictNum:false,
+      tts:Object.assign({},src.tts||{},{ttsLang:lang.tts})}));
+    const pk=['introText','outroText','nextText'],pt=cc.design&&cc.design.parts||{};
+    const tr=await translateStrings([src.name||'과정'].concat(pk.map(k=>pt[k]||'')),lang);
+    cc.name=(tr[0]||src.name)+' ('+lang.name+')';
+    pk.forEach((k,i)=>{if(pt[k])pt[k]=tr[1+i];});
+    await langLabels(cc,lang);
+    await Store.put('courses',cc);allCourses.push(cc);
+  }
+  const all=(await Store.all('lessons')).filter(l=>l.courseId===src.id).sort(byNo);
+  const recs=scope==='all'?all:all.filter(l=>l.id===project.id);
+  const have=(await Store.all('lessons')).filter(l=>l.courseId===cc.id);
+  let done=0,vids=0;
+  for(const r0 of recs){
+    if(ui.isCancelled())break;
+    const old=have.find(l=>l.langSrc===r0.id);
+    if(old){await snapQueue(()=>snapTake('before','다시 번역하기 전',old,cc));}
+    let rec=JSON.parse(JSON.stringify(r0));
+    rec.id=old?old.id:uid('l');rec.courseId=cc.id;rec.langSrc=r0.id;
+    const scenes=[];(rec.units||[]).forEach(u=>{u.id=uid('u');(u.scenes||[]).forEach(s=>scenes.push(s));});
+    if(rec.parts)[rec.parts.opening,rec.parts.closing].forEach(pp=>pp&&(pp.scenes||[]).forEach(s=>{scenes.push(s);s.auto=false;}));   // 자동 나레이션(한국어 틀) 대신 번역한 글
+    scenes.forEach(s=>{s.id=uid('s');
+      ['audioOut','audioLocal','ttsParts','ttsPartsSrc','ttsText','avatarOut','clipOut','audioStale'].forEach(k=>{delete s[k];});s.audioSec=0;
+      if(s.presenterVid)vids++;});
+    rec=remapIds(rec,await copyBlobs(await courseBlobIds([rec])));       // 강사 영상 등은 따로 복사
+    const slots=lessonTextSlots(rec),label=(r0.lesson&&r0.lesson.no?r0.lesson.no+'차시':'차시');
+    const tr=await translateStrings(slots.map(x=>x[0][x[1]]),lang,(a,n)=>ui.onStatus(label+' 번역 중 · '+a+'/'+n));
+    slots.forEach((x,i)=>{x[0][x[1]]=tr[i];});
+    (rec.units||[]).forEach(u=>(u.scenes||[]).forEach(s=>{s.durationSec=estSec(s.narration||'');}));
+    await Store.put('lessons',rec);
+    const sum=lessonSummary(bindLesson(cc,JSON.parse(JSON.stringify(rec))));
+    const i=cc.lessons.findIndex(x=>x.id===rec.id);if(i>=0)cc.lessons[i]=sum;else cc.lessons.push(sum);
+    done++;ui.onProgress(done/recs.length);
+  }
+  cc.updatedAt=Date.now();await Store.put('courses',cc);
+  return {course:cc,lessons:done,videos:vids};
+}
+
 /* ══════════ LMS 학습 패키지 (SCORM 1.2) ══════════
    장 영상 + 자막(VTT) + 웹 플레이어(index.html) + imsmanifest.xml 을 ZIP 하나로.
    플레이어: 진도(본 구간)·이어 보기·평가 문제에서 멈추고 풀기·점수를 LMS에 보고 (cmi.core.*).
@@ -9534,7 +9697,8 @@ aside h3{margin:10px 0 6px;font-size:13px;color:var(--sub);font-weight:600}
 .go{padding:10px 18px;border-radius:8px;border:0;background:var(--acc);color:#0b1320;font:inherit;font-weight:700;cursor:pointer}.go.ghost{background:none;color:var(--text);border:1px solid var(--line)}
 @media (max-width:720px){aside{flex-basis:100%}.qq{font-size:17px}.opt{font-size:15px}}`;
 const SCORM_JS=String.raw`(function(){
-var D=JSON.parse(document.getElementById('data').textContent),v=document.getElementById('v'),$=function(i){return document.getElementById(i);};
+var D=JSON.parse(document.getElementById('data').textContent),T=D.T||{},v=document.getElementById('v'),$=function(i){return document.getElementById(i);};
+function fm(s,o){return String(s==null?'':s).replace(/\{(\w+)\}/g,function(m,k){return o&&o[k]!=null?o[k]:m;});}
 document.documentElement.style.setProperty('--acc',D.accent||'#4fc3f7');
 function findAPI(w){var n=0;try{while(w&&!w.API&&w.parent&&w.parent!==w&&n<12){w=w.parent;n++;}return (w&&w.API)||null;}catch(e){return null;}}
 var API=findAPI(window);if(!API&&window.opener){try{API=findAPI(window.opener);}catch(e){}}
@@ -9565,20 +9729,20 @@ function save(){var o={v:1,f:cur,t:Math.floor(v.currentTime||0),w:W.map(ranges),
   else{try{localStorage.setItem(LS,raw);}catch(e){}}
   dirty=0;}
 function mmss(t){t=Math.max(0,Math.floor(t));return Math.floor(t/60)+':'+String(t%60).padStart(2,'0');}
-var LAB={passed:'합격',failed:'불합격',completed:'수료 기준 충족',incomplete:'학습 중'};
-function ui(){var p=pct(),sc=score(),st=status();$('pt').textContent='진도 '+Math.floor(p*100)+'%';$('pb').style.width=Math.min(100,p*100)+'%';
-  $('sc').textContent=(sc&&sc.n?'점수 '+sc.raw+'점 ('+sc.ok+'/'+sc.all+') · ':'')+LAB[st];
+var LAB={passed:T.passed,failed:T.failed,completed:T.completed,incomplete:T.incomplete};
+function ui(){var p=pct(),sc=score(),st=status();$('pt').textContent=fm(T.progress,{n:Math.floor(p*100)});$('pb').style.width=Math.min(100,p*100)+'%';
+  $('sc').textContent=(sc&&sc.n?fm(T.score,{s:sc.raw,ok:sc.ok,all:sc.all})+' · ':'')+LAB[st];
   Array.prototype.forEach.call(document.querySelectorAll('.tab'),function(b,i){b.classList.toggle('cur',i===cur);b.querySelector('.p').textContent=Math.floor(fpct(i)*100)+'%';});
   Array.prototype.forEach.call(document.querySelectorAll('.ch'),function(b){var t=+b.dataset.t;b.disabled=D.lock&&t>M[cur]+1.5&&fpct(cur)<0.98;
     b.classList.toggle('cur',t<=v.currentTime+0.3&&(!b.nextElementSibling||+b.nextElementSibling.dataset.t>v.currentTime+0.3));});}
 function tabs(){var el=$('tabs');el.innerHTML='';if(F.length<2){el.style.display='none';return;}
   F.forEach(function(f,i){var b=document.createElement('button');b.className='tab';b.innerHTML='<span></span><span class="p"></span>';b.firstChild.textContent=f.label+(f.title&&f.title!==f.label?' · '+f.title:'');
     b.onclick=function(){if(i!==cur){save();setFile(i,0,true);}};el.appendChild(b);});}
-function chapters(){var el=$('chs');el.innerHTML='';var L=(F[cur].chapters||[]);if(!L.length)L=[{t:0,title:'처음'}];
+function chapters(){var el=$('chs');el.innerHTML='';var L=(F[cur].chapters||[]);if(!L.length)L=[{t:0,title:T.first}];
   L.forEach(function(c){var b=document.createElement('button');b.className='ch';b.dataset.t=c.t;b.innerHTML='<span class="tm"></span><span></span>';b.firstChild.textContent=mmss(c.t);b.lastChild.textContent=c.title;
     b.onclick=function(){if(b.disabled)return;v.currentTime=c.t;v.play();};el.appendChild(b);});}
 function setFile(i,t,play){cur=i;lastT=t||0;var f=F[i];v.innerHTML='';v.src=f.src;
-  if(f.vtt){var tr=document.createElement('track');tr.kind='subtitles';tr.srclang='ko';tr.label='한국어';tr.src=f.vtt;tr.default=true;v.appendChild(tr);}
+  if(f.vtt){var tr=document.createElement('track');tr.kind='subtitles';tr.srclang=D.lang||'ko';tr.label=T.subs;tr.src=f.vtt;tr.default=true;v.appendChild(tr);}
   v.addEventListener('loadedmetadata',function h(){v.removeEventListener('loadedmetadata',h);if(t)v.currentTime=t;if(play)v.play().catch(function(){});},{once:true});
   chapters();ui();}
 v.addEventListener('timeupdate',function(){var t=v.currentTime,prev=lastT,u=W[cur];
@@ -9586,36 +9750,36 @@ v.addEventListener('timeupdate',function(){var t=v.currentTime,prev=lastT,u=W[cu
   lastT=t;
   if(!openQ)(F[cur].quiz||[]).some(function(q){if(!A[q.id]&&prev<q.at+0.05&&t>=q.at-0.05&&t<q.at+3){v.pause();ask(q,false);return true;}return false;});
   if(dirty>40)save();ui();});
-v.addEventListener('seeking',function(){if(D.lock&&v.currentTime>M[cur]+1.5&&fpct(cur)<0.98){var b=M[cur];setTimeout(function(){v.currentTime=b;},0);note('처음 볼 때는 앞으로 건너뛸 수 없습니다');}lastT=v.currentTime;});
+v.addEventListener('seeking',function(){if(D.lock&&v.currentTime>M[cur]+1.5&&fpct(cur)<0.98){var b=M[cur];setTimeout(function(){v.currentTime=b;},0);note(T.noSkip);}lastT=v.currentTime;});
 v.addEventListener('pause',function(){save();});
 v.addEventListener('play',function(){if(openQ&&!A[openQ.id])v.pause();});
 v.addEventListener('ended',function(){var u=W[cur];for(var k=Math.floor(Math.max(0,v.duration-1.5));k<u.length;k++)u[k]=1;M[cur]=Math.max(M[cur],v.duration||0);save();
   if(cur<F.length-1){setFile(cur+1,0,true);return;}finish();});
 function note(m){var el=$('nt2');el.textContent=m;clearTimeout(note.t);note.t=setTimeout(function(){el.textContent='';},3500);}
 var B2=['①','②','③','④','⑤','⑥'];
-function ask(q,endMode,then){openQ=q;var ov=$('ov'),opts=$('qo');ov.classList.add('on');$('qn').textContent='평가 문제 '+(q.no||'');$('qq').textContent=q.question;$('fb').className='fb';$('fb').textContent='';
+function ask(q,endMode,then){openQ=q;var ov=$('ov'),opts=$('qo');ov.classList.add('on');$('qn').textContent=fm(T.quizNo,{n:q.no||''});$('qq').textContent=q.question;$('fb').className='fb';$('fb').textContent='';
   opts.innerHTML='';opts.className='opts'+(q.type==='ox'?' ox':'');
   var C=q.type==='ox'?['O','X']:q.choices;
   C.forEach(function(c,i){var b=document.createElement('button');b.className='opt';b.textContent=q.type==='ox'?(c==='O'?'○':'✕'):(B2[i]||(i+1)+'.')+' '+c;
     b.onclick=function(){if(b.disabled)return;var x=q.type==='ox'?c:i+1,ok=String(x)===String(q.answer);A[q.id]={x:x,c:ok};
       Array.prototype.forEach.call(opts.children,function(o,j){o.disabled=true;var xx=q.type==='ox'?C[j]:j+1;if(String(xx)===String(q.answer))o.classList.add('ok');else if(j===i)o.classList.add('no');});
-      var ans=q.type==='ox'?(q.answer==='O'?'○ (맞음)':'✕ (틀림)'):(B2[q.answer-1]||q.answer)+' '+(q.choices[q.answer-1]||'');
-      var fb=$('fb');fb.className='fb on';fb.innerHTML='';var h=document.createElement('b');h.textContent=ok?'정답입니다! ':'아쉽습니다. ';h.style.color=ok?'var(--ok)':'var(--bad)';fb.appendChild(h);
-      fb.appendChild(document.createTextNode((ok?'':'정답은 '+ans+' 입니다.')+(q.explain?'\n'+q.explain:'')));
+      var ans=q.type==='ox'?(q.answer==='O'?T.oxO:T.oxX):(B2[q.answer-1]||q.answer)+' '+(q.choices[q.answer-1]||'');
+      var fb=$('fb');fb.className='fb on';fb.innerHTML='';var h=document.createElement('b');h.textContent=(ok?T.right:T.wrong)+' ';h.style.color=ok?'var(--ok)':'var(--bad)';fb.appendChild(h);
+      fb.appendChild(document.createTextNode((ok?'':fm(T.answerIs,{a:ans}))+(q.explain?'\n'+q.explain:'')));
       $('go').style.display='';save();ui();};
     opts.appendChild(b);});
-  $('go').style.display='none';$('go').textContent=endMode?'다음':'계속 보기';
+  $('go').style.display='none';$('go').textContent=endMode?T.next:T.cont;
   $('go').onclick=function(){ov.classList.remove('on');openQ=null;if(endMode){if(then)then();return;}
     var u=W[cur];for(var k=Math.floor(q.at);k<=Math.floor(q.resume)&&k<u.length;k++)u[k]=1;if(q.resume>M[cur])M[cur]=q.resume;   // 문제를 푸는 동안 건너뛴 생각 시간은 본 것으로
     v.currentTime=q.resume;lastT=q.resume;v.play().catch(function(){});};}
 function finish(){var rest=allQ().filter(function(q){return !A[q.id];});
   if(rest.length){var i=0;(function next(){if(i>=rest.length){done();return;}ask(rest[i++],true,next);})();return;}done();}
-function done(){finished=true;save();var sc=score(),st=status(),ov=$('ov');ov.classList.add('on');$('qn').textContent='학습 결과';
-  $('qq').textContent='진도 '+Math.floor(pct()*100)+'%'+(sc?' · 점수 '+sc.raw+'점 ('+sc.ok+'/'+sc.all+')':'')+'\n'+LAB[st]+(st==='failed'?' — 합격 점수 '+D.mastery+'점':'')+(st==='incomplete'&&pct()*100<D.thr?' — 수료 기준 진도 '+D.thr+'%':'');
+function done(){finished=true;save();var sc=score(),st=status(),ov=$('ov');ov.classList.add('on');$('qn').textContent=T.result;
+  $('qq').textContent=fm(T.progress,{n:Math.floor(pct()*100)})+(sc?' · '+fm(T.score,{s:sc.raw,ok:sc.ok,all:sc.all}):'')+'\n'+LAB[st]+(st==='failed'?fm(T.needScore,{m:D.mastery}):'')+(st==='incomplete'&&pct()*100<D.thr?fm(T.needPct,{t:D.thr}):'');
   var o=$('qo');o.innerHTML='';o.className='opts';$('fb').className='fb';
-  var b1=document.createElement('button');b1.className='go';b1.textContent='처음부터 다시 보기';b1.onclick=function(){ov.classList.remove('on');setFile(0,0,true);};
+  var b1=document.createElement('button');b1.className='go';b1.textContent=T.restart;b1.onclick=function(){ov.classList.remove('on');setFile(0,0,true);};
   var row=document.createElement('div');row.className='btns';row.appendChild(b1);
-  if(sc&&st==='failed'){var b2=document.createElement('button');b2.className='go ghost';b2.textContent='평가 다시 풀기';b2.onclick=function(){allQ().forEach(function(q){delete A[q.id];});save();finish();};row.appendChild(b2);}
+  if(sc&&st==='failed'){var b2=document.createElement('button');b2.className='go ghost';b2.textContent=T.retry;b2.onclick=function(){allQ().forEach(function(q){delete A[q.id];});save();finish();};row.appendChild(b2);}
   o.appendChild(row);$('go').style.display='none';}
 function bye(){if(bye.d)return;bye.d=1;save();if(API){var ms=Date.now()-started,h=Math.floor(ms/3600000),m=Math.floor(ms/60000)%60,sec=(ms%60000)/1000;
   s('cmi.core.session_time',String(h).padStart(4,'0')+':'+String(m).padStart(2,'0')+':'+sec.toFixed(2).padStart(5,'0'));s('cmi.core.exit',status()==='incomplete'?'suspend':'');commit();try{API.LMSFinish('');}catch(e){}}}
@@ -9623,20 +9787,26 @@ window.addEventListener('pagehide',bye);window.addEventListener('beforeunload',b
 setInterval(function(){if(dirty)save();},20000);
 $('tt').textContent=D.lesson;$('ct').textContent=D.course;document.title=D.lesson;
 if(API&&g('cmi.core.lesson_status')==='not attempted')s('cmi.core.lesson_status','incomplete');
-$('nt').textContent='수료 기준: 진도 '+D.thr+'% 이상'+(allQ().length?' · 평가 '+allQ().length+'문항, '+D.mastery+'점 이상':'')+(D.lock?' · 처음 볼 때는 앞으로 건너뛸 수 없습니다':'')+(API?'':' · (LMS 없이 실행 중 — 진도는 이 브라우저에 저장)');
+$('nt').textContent=fm(T.critPct,{t:D.thr})+(allQ().length?fm(T.critQuiz,{n:allQ().length,m:D.mastery}):'')+(D.lock?' · '+T.noSkip:'')+(API?'':T.noLms);
 tabs();setFile(cur,resumeT>5?resumeT:0,false);
-if(resumeT>5){var tw=$('toast');tw.classList.add('on');$('tmsg').textContent='지난번 본 곳('+mmss(resumeT)+')부터 이어 봅니다';$('tfirst').onclick=function(){v.currentTime=0;tw.classList.remove('on');};setTimeout(function(){tw.classList.remove('on');},8000);}
+if(resumeT>5){var tw=$('toast');tw.classList.add('on');$('tmsg').textContent=fm(T.resume,{t:mmss(resumeT)});$('tfirst').onclick=function(){v.currentTime=0;tw.classList.remove('on');};setTimeout(function(){tw.classList.remove('on');},8000);}
 window.__occScorm={state:function(){return {cur:cur,pct:pct(),score:score(),status:status(),answers:A,max:M.slice()};},api:!!API};
 })();`;
+const SCORM_UI={progress:'진도 {n}%',score:'점수 {s}점 ({ok}/{all})',passed:'합격',failed:'불합격',completed:'수료 기준 충족',incomplete:'학습 중',
+  first:'처음',noSkip:'처음 볼 때는 앞으로 건너뛸 수 없습니다',quizNo:'평가 문제 {n}',right:'정답입니다!',wrong:'아쉽습니다.',answerIs:'정답은 {a} 입니다.',
+  oxO:'○ (맞음)',oxX:'✕ (틀림)',next:'다음',cont:'계속 보기',result:'학습 결과',needScore:' — 합격 점수 {m}점',needPct:' — 수료 기준 진도 {t}%',
+  restart:'처음부터 다시 보기',retry:'평가 다시 풀기',critPct:'수료 기준: 진도 {t}% 이상',critQuiz:' · 평가 {n}문항, {m}점 이상',noLms:' · (LMS 없이 실행 중 — 진도는 이 브라우저에 저장)',
+  resume:'지난번 본 곳({t})부터 이어 봅니다',fromStart:'처음부터',toc:'차례',subs:'한국어',pointsSuffix:''};
 function scormPlayerHtml(D){
+  D=Object.assign({},D,{T:Object.assign({},SCORM_UI,D.T||{})});const T=D.T;
   const json=JSON.stringify(D).replace(/</g,'\\u003c');
   const SC='<'+'/script>';
-  return '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+xesc(D.lesson)+'</title><style>'+SCORM_CSS+'</style></head><body>'+
-    '<header><div><div class="t" id="tt"></div><div class="c" id="ct"></div></div><div class="prog"><span id="pt">진도 0%</span><span class="bar"><i id="pb"></i></span><span id="sc"></span></div></header>'+
+  return '<!doctype html><html lang="'+xesc(D.lang||'ko')+'"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+xesc(D.lesson)+'</title><style>'+SCORM_CSS+'</style></head><body>'+
+    '<header><div><div class="t" id="tt"></div><div class="c" id="ct"></div></div><div class="prog"><span id="pt"></span><span class="bar"><i id="pb"></i></span><span id="sc"></span></div></header>'+
     '<main><div class="stage"><video id="v" controls playsinline preload="metadata"></video>'+
-    '<div class="toast" id="toast"><span id="tmsg"></span><button id="tfirst">처음부터</button></div>'+
-    '<div class="ov" id="ov"><div class="qbox"><div class="qn" id="qn"></div><div class="qq" id="qq"></div><div class="opts" id="qo"></div><div class="fb" id="fb"></div><div class="btns"><button class="go" id="go">계속 보기</button></div></div></div></div>'+
-    '<aside><div class="tabs" id="tabs"></div><h3>차례</h3><div id="chs"></div><div class="nt" id="nt"></div><div class="nt" id="nt2"></div></aside></main>'+
+    '<div class="toast" id="toast"><span id="tmsg"></span><button id="tfirst">'+xesc(T.fromStart)+'</button></div>'+
+    '<div class="ov" id="ov"><div class="qbox"><div class="qn" id="qn"></div><div class="qq" id="qq"></div><div class="opts" id="qo"></div><div class="fb" id="fb"></div><div class="btns"><button class="go" id="go"></button></div></div></div></div>'+
+    '<aside><div class="tabs" id="tabs"></div><h3>'+xesc(T.toc)+'</h3><div id="chs"></div><div class="nt" id="nt"></div><div class="nt" id="nt2"></div></aside></main>'+
     '<script id="data" type="application/json">'+json+SC+'<script>'+SCORM_JS+SC+'</body></html>';
 }
 async function exportScorm(ui){
@@ -9664,7 +9834,9 @@ async function exportScorm(ui){
   const used=new Set();fd.forEach(f=>f.quiz.forEach(q=>used.add(q.id)));
   const P=project.parts,endQuiz=(P.quiz||[]).map((q,i)=>[q,i]).filter(([q])=>q.question&&!used.has(q.id)).map(([q,i])=>scormQ(q,i+1));
   const lessonTitle=(L.no?L.no+'차시 ':'')+(L.title||'');
-  const data={id:course.id+'_'+project.id,course:course.name||'',lesson:lessonTitle,accent:d.accent||'#4fc3f7',thr:S.thr,mastery:S.mastery,lock:!!S.lock,files:fd,endQuiz:endQuiz};
+  if(_l10n){fd.forEach(f=>{f.title=l10nText(f.title);f.label=l10nText(f.label);f.chapters.forEach(c=>{c.title=l10nText(c.title);});});}
+  const data={id:course.id+'_'+project.id,course:course.name||'',lesson:l10nText(lessonTitle),accent:d.accent||'#4fc3f7',thr:S.thr,mastery:S.mastery,lock:!!S.lock,files:fd,endQuiz:endQuiz,
+    lang:course.lang||'ko',T:course.l10nUi||null};
   const html=scormPlayerHtml(data),nq=fd.reduce((a,f)=>a+f.quiz.length,0)+endQuiz.length;
   const all=[{name:'index.html',blob:new Blob([html],{type:'text/html'})}].concat(media);
   const man=scormManifest({id:data.id,course:data.course,lesson:lessonTitle,quiz:nq>0,mastery:S.mastery,files:all.map(x=>x.name)});
@@ -9851,7 +10023,13 @@ const hx=c=>String(c||'#000000').replace('#','').toUpperCase();
 
 /* data: {courseName, lessonNo, lessonTitle, units:[{title, scenes:[{title,items,note,narration,source,layout,image(dataURL|null)}]}]} */
 function buildPptxSlides(pptx,d,data){
-  const F=d.pptFont||'맑은 고딕';
+  if(_l10n&&!pptx.__l10n){                                // 언어판: 고정 문구를 그 언어로
+    pptx.__l10n=true;const add0=pptx.addSlide.bind(pptx);
+    pptx.addSlide=function(){const sl=add0.apply(null,arguments),at=sl.addText.bind(sl),an=sl.addNotes&&sl.addNotes.bind(sl);
+      sl.addText=function(tx,op){if(typeof tx==='string')tx=l10nText(tx);else if(Array.isArray(tx))tx=tx.map(r=>r&&typeof r.text==='string'?Object.assign({},r,{text:l10nText(r.text)}):r);return at(tx,op);};
+      if(an)sl.addNotes=n=>an(l10nText(n));return sl;};
+  }
+  const F=d.pptFont||(_l10n?'Arial':'맑은 고딕');
   pptx.layout='LAYOUT_WIDE';
   pptx.title=(data.lessonNo?data.lessonNo+'차시 ':'')+data.lessonTitle;
   const bgFill={color:hx(d.bg)};
