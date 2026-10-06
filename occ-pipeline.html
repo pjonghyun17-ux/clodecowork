@@ -5162,23 +5162,33 @@ function gestureFor(text,kind){
 }
 function makeRigMotion(rig){
   const G=rig.gestures||{rest:{armL:-48,armR:6},present:{armL:8,armR:-6},point:{armL:32,armR:-4},open:{armL:16,armR:-40},wave:{armL:22,armR:0,wave:1}};
-  const st={armL:G.rest.armL,armR:G.rest.armR,head:0,brow:0,blinkT:1.5};
+  const R0=G.rest||{armL:-48,armR:6};
+  const st={armL:R0.armL,armR:R0.armR,vL:0,vR:0,head:0,brow:0,blinkT:1.5,lv:0,beat:0,lastBeat:-9,quiet:0};
   let seed=7;const rnd=()=>{seed=(seed*9301+49297)%233280;return seed/233280;};
   return function(t,dt,g,level,talking){
-    const tg=G[g]||G.present;
-    let aL=tg.armL,aR=tg.armR;
-    if(tg.wave)aL+=Math.sin(t*2*Math.PI*2.6)*14;
-    else if(talking)aL+=level*6*Math.sin(t*9);
+    dt=Math.max(0.001,Math.min(0.1,dt||1/30));
+    const tg=G[g]||G.present,lv=level||0;
+    // 말이 잠깐 끊기면(0.7초 넘게 조용) 팔을 반쯤 내려 쉼
+    st.quiet=(talking&&lv<0.08)?st.quiet+dt:0;
+    const relax=talking?Math.max(0,Math.min(1,(st.quiet-0.7)/0.6))*0.5:0;
+    let aL=tg.armL+(R0.armL-tg.armL)*relax,aR=tg.armR+(R0.armR-tg.armR)*relax;
+    // 말 박자: 소리가 갑자기 커지는 순간(음절 강세)에 손이 짧게 툭 — 일정한 떨림 대신
+    if(talking&&lv-st.lv>0.18&&lv>0.35&&t-st.lastBeat>0.32){st.beat=1;st.lastBeat=t;}
+    st.lv+=(lv-st.lv)*(1-Math.exp(-dt/0.12));
+    st.beat*=Math.exp(-dt/0.16);
+    aL-=st.beat*7;
     aL+=Math.sin(t*2*Math.PI/4.1)*3;aR+=Math.sin(t*2*Math.PI/3.7+1)*2.5;
-    const k=1-Math.exp(-dt/0.16);
-    st.armL+=(aL-st.armL)*k;st.armR+=(aR-st.armR)*k;
-    const headT=Math.sin(t*2*Math.PI/5.3)*1.6+(talking?level*2.2:0);
+    // 스프링으로 따라감: 목표에 미끄러지듯 붙지 않고 살짝 넘어갔다 돌아옴
+    const w=2*Math.PI*1.5,z=0.72,n=Math.ceil(dt/0.02),h=dt/n;
+    for(let i=0;i<n;i++){st.vL+=(w*w*(aL-st.armL)-2*z*w*st.vL)*h;st.armL+=st.vL*h;st.vR+=(w*w*(aR-st.armR)-2*z*w*st.vR)*h;st.armR+=st.vR*h;}
+    const wave=tg.wave?Math.sin(t*2*Math.PI*2.6)*14:0;    // 손 흔들기는 스프링 뒤에 더해 크기를 그대로
+    const headT=Math.sin(t*2*Math.PI/5.3)*1.6+(talking?lv*2.2:0)+st.beat*2.5;
     st.head+=(headT-st.head)*(1-Math.exp(-dt/0.12));
-    const browT=level>0.95?5:0;st.brow+=(browT-st.brow)*(1-Math.exp(-dt/0.08));
+    const browT=lv>0.95?5:0;st.brow+=(browT-st.brow)*(1-Math.exp(-dt/0.08));
     let blink=0;
     if(t>st.blinkT){const p=(t-st.blinkT)/0.14;blink=p<1?1:0;if(p>=1)st.blinkT=t+3+rnd()*2;}
-    return {armL:st.armL,armR:st.armR,head:st.head,headY:-level*2.5,brow:st.brow,
-      breath:Math.sin(t*2*Math.PI/3.2)*0.008,bob:level*3,blink:blink};
+    return {armL:st.armL+wave,armR:st.armR,head:st.head,headY:-lv*2.5-st.beat*3,brow:st.brow,
+      breath:Math.sin(t*2*Math.PI/3.2)*0.008,bob:lv*3,blink:blink,beat:st.beat,level:lv,g:g};
   };
 }
 
@@ -5903,6 +5913,10 @@ function glbFindMouth(T,sk,S){
    그런 클립을 그대로 재생하면 캐릭터가 T자세로 멈춰 버리므로, 실제로 뼈를 돌리는 클립만 남기고
    이름으로(이름이 없으면 다리를 크게 흔드는지로) 서 있기·말하기·걷기 동작을 정합니다. */
 const GLB_WALK_RE=/walk|run|jog|step|locomot|걷|뛰/i;
+const GLB_TALK_RE=/talk|explain|gesture|speak|present|wave|point|argu|convers|lectur|agree|discuss|tell|teach|말하|설명/i;
+const GLB_IDLE_RE=/idle|stand|breath|wait|대기/i;
+/* 클립마다 역할(대기·말하기·걷기)을 정함: 동작 파일에서 고른 역할 → 이름(파일 이름 포함) → 다리를 크게 흔드는지.
+   역할마다 여러 개를 모아 두고 번갈아 써서 같은 동작이 되풀이돼 보이지 않게 합니다. */
 function glbClipRoles(T,sc,clips,S){
   const PB=T.PropertyBinding,legs=new Set();
   if(S)['R','L'].forEach(k=>{const ch=S.legs[k];if(ch&&ch[0])legs.add(ch[0].name);});
@@ -5919,26 +5933,53 @@ function glbClipRoles(T,sc,clips,S){
     // 3° 넘게 움직이고 · 0.1초보다 길고 · 트랙 30% 이상이 실제 뼈에 붙어야 쓸 수 있는 동작
     return {clip:clip,ok:ang>0.05&&clip.duration>0.1&&bound>=Math.max(1,clip.tracks.length*0.3),leg:leg};
   });
-  const ok=info.filter(i=>i.ok),nm=re=>ok.find(i=>re.test(i.clip.name));
-  const walk=nm(GLB_WALK_RE)||ok.find(i=>i.leg>0.26&&!/idle|stand|breath|talk|gesture|wave/i.test(i.clip.name));
-  const talk=nm(/talk|explain|gesture|speak|present|wave|point|argu|convers|lectur/i);
-  const idle=nm(/idle|stand|breath|wait|대기/i)||ok.find(i=>i!==walk&&i!==talk&&i.leg<=0.26&&!GLB_WALK_RE.test(i.clip.name));
-  return {idle:idle?idle.clip:null,talk:talk?talk.clip:null,walk:walk?walk.clip:null,
-    usable:ok.map(i=>i.clip),skipped:info.filter(i=>!i.ok).map(i=>i.clip.name)};
+  const ok=info.filter(i=>i.ok&&!(i.clip.userData&&i.clip.userData.role==='off'));
+  const roleOf=i=>{
+    const r=i.clip.userData&&i.clip.userData.role;if(r==='idle'||r==='talk'||r==='walk')return r;
+    const n=i.clip.name;
+    if(GLB_WALK_RE.test(n))return 'walk';if(GLB_TALK_RE.test(n))return 'talk';if(GLB_IDLE_RE.test(n))return 'idle';
+    return i.leg>0.26?'walk':'idle';
+  };
+  const P={idle:[],talk:[],walk:[]};ok.forEach(i=>P[roleOf(i)].push(i.clip));
+  return {idle:P.idle,talk:P.talk,walk:P.walk,usable:ok.map(i=>i.clip),skipped:info.filter(i=>!i.ok).map(i=>i.clip.name)};
+}
+/* 따로 받은 동작 파일(Meshy 동작 GLB 등)의 클립을 이 캐릭터에 맞춤.
+   뼈 이름이 같으면 그대로 붙고, 다른 체형에서 온 동작이어도 팔다리 길이가 바뀌지 않게 회전만 쓰며
+   엉덩이 높이는 비율로 맞춥니다. 뼈가 아닌 노드(Armature 등)의 움직임은 버림 */
+function glbAdaptClip(T,clip,sc,hipName,hipRest){
+  const PB=T.PropertyBinding,tracks=[];
+  clip.tracks.forEach(tr=>{
+    const pn=PB.parseTrackName(tr.name),node=PB.findNode(sc,pn.nodeName);
+    if(!node||!node.isBone)return;
+    if(pn.propertyName==='quaternion'){tracks.push(tr);return;}
+    if(pn.propertyName==='position'&&pn.nodeName===hipName&&hipRest){
+      const t=tr.clone(),v=t.values,n=t.times.length,vs=n?v.length/n:3,o=vs>=9?3:0;
+      const f=Math.hypot(v[o],v[o+1],v[o+2]),k=f>1e-6?hipRest.length()/f:1;
+      for(let i=0;i<v.length;i++)v[i]*=k;
+      tracks.push(t);
+    }
+  });
+  const c=new T.AnimationClip(clip.name,clip.duration,tracks);c.userData=Object.assign({},clip.userData);
+  return c;
 }
 /* ── 뼈대가 있는 모델 (Meshy 리깅 등) ──
-   모델 안에 쓸 만한 동작이 있으면 그 동작을, 없는 상태(서 있기·말하기·걷기)는 뼈 방향으로 직접 자세를 잡아 채웁니다.
-   둘 사이를 오갈 때는 뼈마다 부드럽게 섞어 튀지 않게 합니다. */
-function glbSkeletonKia(T,gltf,sk,rig,imgs){
+   두 겹으로 움직입니다.
+   ① 동작(클립): 모델 안이나 따로 올린 동작 파일의 대기·말하기·걷기 동작을 상태에 맞춰 고르고, 여러 개면 번갈아 섞어 씀
+   ② 자동 동작: 클립이 없는 상태를 채움 — 숨쉬기·무게중심 옮기기(척추 S자)·스프링으로 따라가는 팔·팔 들면 어깨도·
+      음성 강세에 맞춘 손짓·고개 끄덕임·시선(가리킬 땐 화면, 다시 카메라)·몸짓마다 조금씩 다른 변주
+   클립 위에는 화면 가리키기(오른팔)와 시선·끄덕임만 덧씌워, 모션캡처 동작은 살리면서 화면을 가리킬 수 있게 합니다. */
+function glbSkeletonKia(T,gltf,sk,rig,imgs,extra){
   const sc=gltf.scene;sc.updateMatrixWorld(true);
   const box=glbBox(T,sc),sz=box.getSize(new T.Vector3()),c=box.getCenter(new T.Vector3());
   let S=null,sErr=null;try{S=classifySkeleton(T,sk);}catch(e){sErr=e;}
-  const CL=glbClipRoles(T,sc,gltf.animations,S);
-  if(!S&&!CL.usable.length)throw sErr||new Error('뼈대를 읽지 못했습니다');
   const skins=[];sc.traverse(o=>{if(o.isSkinnedMesh)skins.push(o);});
   const bones=[...new Set([].concat(...skins.map(m=>m.skeleton.bones)))];
   let hip=S&&S.pelvis?S.pelvis:bones[0];if(!S||!S.pelvis)while(hip.parent&&hip.parent.isBone)hip=hip.parent;
+  const clips=(gltf.animations||[]).concat((extra||[]).map(cp=>glbAdaptClip(T,cp,sc,hip.name,hip.position)));
+  const CL=glbClipRoles(T,sc,clips,S);
+  if(!S&&!CL.usable.length)throw sErr||new Error('뼈대를 읽지 못했습니다');
   const rest=new Map(bones.map(b=>[b,[b.quaternion.clone(),b.position.clone(),b.scale.clone()]]));
+  const spine=[];if(S){let x=S.chest;while(x&&x.isBone&&x!==S.pelvis){spine.unshift(x);x=x.parent;}}   // 골반 위 ~ 가슴
   // ── 입: 말할 때만 원작의 벌린 입을 덮어 그림 (다물면 모델 원래 입)
   let mouthDecal=null,drawMouth=()=>{};
   if(S)try{
@@ -5978,6 +6019,7 @@ function glbSkeletonKia(T,gltf,sk,rig,imgs){
     b.getWorldQuaternion(qa);b.parent.getWorldQuaternion(qb);
     b.quaternion.copy(qb.invert().multiply(q.multiply(qa)));b.updateMatrixWorld(true);
   }
+  function aimBlend(b,ch,dir,w){if(!b||!ch)return;const q0=b.quaternion.clone();aim(b,ch,dir);if(w<0.999){b.quaternion.copy(q0.slerp(b.quaternion,w));b.updateMatrixWorld(true);}}
   function turn(b,e){if(!b)return;b.getWorldQuaternion(qa);b.parent.getWorldQuaternion(qb);root.getWorldQuaternion(qr);
     const qe=new T.Quaternion().setFromEuler(e),qw=qr.clone().multiply(qe).multiply(qr.clone().invert());
     b.quaternion.copy(qb.invert().multiply(qw.multiply(qa)));b.updateMatrixWorld(true);}
@@ -5986,61 +6028,148 @@ function glbSkeletonKia(T,gltf,sk,rig,imgs){
   const leg=(side,th,sh)=>{const ch=S.legs[side];if(!ch)return;aim(ch[0],ch[1],th);if(ch[2])aim(ch[1],ch[2],sh);};
   const reset=()=>{bones.forEach(b=>{const r=rest.get(b);b.quaternion.copy(r[0]);b.position.copy(r[1]);b.scale.copy(r[2]);});root.updateMatrixWorld(true);};
   root.updateMatrixWorld(true);const hip0=sc.worldToLocal(hip.getWorldPosition(new T.Vector3()));   // 엉덩이 제자리 (모델 기준)
-  // 뼈 방향으로 직접 잡는 자세 (모델에 그 상태의 동작이 없을 때)
-  function procedural(pose,walk){
-    const R=-1,Lx=1;                                     // 캐릭터 오른팔(−x) = 2D 리그 armL(화면 왼쪽)
+  // ── 자연스러운 움직임 재료
+  let seed=1+(((sk.geometry.attributes.position.count||1)*7919)%233279);   // 모델마다 같은 결과
+  const rnd=()=>{seed=(seed*9301+49297)%233280;return seed/233280;};
+  // 부드럽게 흔들리는 값 (주기가 서로 맞지 않는 사인 셋을 겹침, −1..1): 같은 박자로 되풀이되지 않음
+  const noise=(t,k)=>Math.sin(t*0.71*k+1.3*k)*0.5+Math.sin(t*1.37*k+0.4)*0.3+Math.sin(t*2.13+k*2.1)*0.2;
+  // 스프링: 목표로 곧장 미끄러지지 않고 살짝 넘어갔다 돌아옴 (사람 팔의 무게감)
+  const springs={};
+  function spring(key,target,dt,hz){
+    let s=springs[key];if(!s){springs[key]={x:target.clone(),v:new T.Vector3()};return target.clone();}
+    const w=2*Math.PI*(hz||1.6),z=0.7,n=Math.max(1,Math.ceil(dt/0.02)),h=dt/n,d=new T.Vector3();
+    for(let i=0;i<n;i++){d.subVectors(target,s.x).multiplyScalar(w*w).addScaledVector(s.v,-2*z*w);s.v.addScaledVector(d,h);s.x.addScaledVector(s.v,h);}
+    return s.x.clone();
+  }
+  // 몸짓 변주: 몸짓이 바뀔 때마다 손 위치를 조금씩 다르게
+  let lastG=null;const varR=new T.Vector3(),varL=new T.Vector3();
+  function vary(g){if(g===lastG)return;lastG=g;varR.set((rnd()-.5)*.16,(rnd()-.5)*.14,(rnd()-.5)*.12);varL.set((rnd()-.5)*.14,(rnd()-.5)*.12,(rnd()-.5)*.1);}
+  // 팔 목표 방향 (모델 기준, 캐릭터 오른팔 = −x = 화면 쪽). 몸짓마다 사람이 실제로 하는 자세:
+  // 내림 = 팔꿈치 살짝 굽혀 몸 옆 · 설명 = 팔꿈치 굽혀 손바닥을 화면 쪽으로 · 가리키기 = 팔을 뻗어 화면 · 양팔 펴기 = 두 손바닥을 허리 앞으로 · 손 흔들기 = 손을 들어 좌우로
+  const GT={rest:[[-.15,-.98,.1],[-.1,-.86,.46],[.15,-.98,.1],[.1,-.86,.46]],
+    present:[[-.34,-.84,.42],[-.55,.12,.83],[.18,-.96,.16],[.18,-.6,.78]],
+    point:[[-.82,.08,.52],[-.8,.28,.5],[.17,-.97,.14],[.14,-.8,.55]],
+    open:[[-.4,-.8,.46],[-.62,.1,.8],[.4,-.8,.46],[.62,.1,.8]],
+    wave:[[-.55,.3,.45],[-.22,.96,.18],[.17,-.97,.12],[.12,-.86,.46]]};
+  function armTargets(pose,t){
+    const g=GT[pose.g]?pose.g:null;
+    if(g){const a=GT[g].map(x=>V(x[0],x[1],x[2]));
+      if(g==='wave')a[1].x+=Math.sin((t||0)*2*Math.PI*2.4)*0.38;
+      return {upR:a[0],foR:a[1],upL:a[2],foL:a[3]};}
+    // 몸짓 이름이 없을 때(직접 만든 리그 몸짓): 2D 리그 팔 각도로 사이를 섞음
+    const R=-1,Lx=1,an=pose.armL!=null?pose.armL:-48,t1=cl((an+40)/48),t2=cl((an-8)/24);
+    const upR=mix(mix(V(R*.15,-.98,.1),V(R*.34,-.84,.42),t1),V(R*.82,.08,.52),t2);
+    const foR=mix(mix(V(R*.1,-.86,.46),V(R*.55,.12,.83),t1),V(R*.8,.28,.5),t2);
+    const b=pose.armR!=null?pose.armR:6,t3=cl((6-b)/46);
+    const upL=mix(V(Lx*.15,-.98,.1),V(Lx*.4,-.8,.46),t3),foL=mix(V(Lx*.1,-.86,.46),V(Lx*.62,.1,.8),t3);
+    return {upR:upR,foR:foR,upL:upL,foL:foL};
+  }
+  // 팔을 들면 쇄골도 조금 따라 올라감
+  function shoulder(side,up){const ch=S.arms[side];if(!ch||ch.length<3)return;const e=cl((up.y+0.6)/1.0)*0.16;if(e>0.002)turn(ch[0],new T.Euler(0,0,side==='R'?-e:e));}
+  // 시선·고개: 가리키거나 손짓을 바꿀 땐 잠깐 화면 쪽을 보고 다시 카메라 쪽으로, 말 강세에 고개를 살짝 끄덕
+  let gaze=-0.12,lookScreenUntil=0,headG=null;
+  function head(pose,walk,t,dt,amt){
+    const hd=S.head[0];if(!hd)return;
+    const g=pose.g||'present';
+    if(g!==headG){headG=g;if(g==='point')lookScreenUntil=t+1.8;else if(g==='present'||g==='open')lookScreenUntil=t+0.7;}
+    const tgt=walk!=null?0:(t<lookScreenUntil?-0.45:-0.12+noise(t*0.5,7.3)*0.07);
+    gaze+=(tgt-gaze)*(1-Math.exp(-dt/0.3));
+    const nod=(pose.headY||0)*0.004+(pose.beat||0)*0.07+noise(t*0.6,8.1)*0.018;
+    const tilt=-(pose.head||0)*Math.PI/180*1.1+noise(t*0.4,9.7)*0.02;
+    turn(hd,new T.Euler(nod*amt,gaze*amt,tilt*amt,'YXZ'));
+  }
+  // 클립이 없을 때 직접 잡는 자세
+  function procedural(pose,walk,t,dt){
+    const R=-1,Lx=1;
     if(walk!=null){
       const s=Math.sin(walk),bob=Math.abs(Math.cos(walk))*0.018*sz.y;
       // 걸음마다 살짝 위아래: 세계 좌표로 올린 뒤 부모 기준으로 되돌림 (Meshy 처럼 Armature 배율 0.01 이어도 같은 높이)
       const hp=hip.getWorldPosition(v1);hp.y+=bob*root.scale.y;hip.position.copy(hip.parent.worldToLocal(hp));root.updateMatrixWorld(true);
       leg('R',V(0,-Math.cos(s*.45),Math.sin(s*.45)),V(0,-Math.cos(s*.45-Math.max(0,-s)*.6),Math.sin(s*.45-Math.max(0,-s)*.6)));
       leg('L',V(0,-Math.cos(-s*.45),Math.sin(-s*.45)),V(0,-Math.cos(-s*.45-Math.max(0,s)*.6),Math.sin(-s*.45-Math.max(0,s)*.6)));
-      arm('R',V(R*.42,-.88,-s*.35),V(R*.3,-.85,-s*.3+.25));arm('L',V(Lx*.42,-.88,s*.35),V(Lx*.3,-.85,s*.3+.25));
+      const w={upR:V(R*.3,-.92,-s*.35),foR:V(R*.2,-.85,-s*.3+.3),upL:V(Lx*.3,-.92,s*.35),foL:V(Lx*.2,-.85,s*.3+.3)};
+      Object.keys(w).forEach(k=>{springs[k]={x:w[k].clone(),v:new T.Vector3()};});   // 걷고 나서도 팔이 이어서 움직이게
+      arm('R',w.upR,w.foR);arm('L',w.upL,w.foL);
     }else{
-      const a=pose.armL!=null?pose.armL:-48,t1=cl((a+40)/48),t2=cl((a-8)/24);
-      const up=mix(mix(V(R*.45,-.88,.1),V(R*.9,.05,.42),t1),V(R*.75,.5,.42),t2),fo=mix(mix(V(R*.3,-.9,.28),V(R*.7,.35,.6),t1),V(R*.5,.75,.45),t2);
-      arm('R',up,fo);
-      const b=pose.armR!=null?pose.armR:6,t3=cl((6-b)/46);
-      arm('L',mix(V(Lx*.45,-.88,.1),V(Lx*.85,.25,.45),t3),mix(V(Lx*.3,-.9,.28),V(Lx*.65,.5,.55),t3));
+      // 숨쉬기 · 무게중심 옮기기: 골반 아래는 그대로 두고 척추만 S자로 살짝 (발이 미끄러지지 않게)
+      const br=Math.sin(t*2*Math.PI/4.2),sway=noise(t*0.35,1.7),lean=noise(t*0.25,2.9);
+      if(spine.length){
+        turn(spine[0],new T.Euler(lean*0.014,sway*0.025,sway*0.026,'YXZ'));
+        turn(spine[spine.length-1],new T.Euler(br*0.014,-sway*0.018,-sway*0.017,'YXZ'));
+      }
+      vary(pose.g||'present');
+      const tg=armTargets(pose,t),beat=pose.beat||0;
+      tg.upR.add(varR);tg.foR.add(varR).add(V(noise(t,3.1)*.03,noise(t,4.3)*.03-beat*.32,0));
+      tg.upL.add(varL);tg.foL.add(varL).add(V(noise(t,5.2)*.03,noise(t,6.1)*.03-beat*.12,0));
+      const upR=spring('upR',tg.upR,dt),foR=spring('foR',tg.foR,dt,2.0),upL=spring('upL',tg.upL,dt,1.4),foL=spring('foL',tg.foL,dt,1.8);
+      shoulder('R',upR);shoulder('L',upL);
+      arm('R',upR,foR);arm('L',upL,foL);
     }
-    const hd=S.head[0];turn(hd,new T.Euler(((pose.headY||0))*0.004,walk!=null?0:-0.17,-(pose.head||0)*Math.PI/180*1.1,'YXZ'));
+    head(pose,walk,t,dt,1);
   }
-  // 모델 안의 동작: 같은 클립이 여러 역할을 맡아도 동작은 하나 (예전엔 걷기=서 있기 클립이면 걸을 때 가중치가 0이 되어 T자세)
-  const anyClip=CL.idle||CL.talk||CL.walk||CL.usable[0]||null;
+  // 클립 위에 덧씌우기: 화면 가리키기(오른팔)·시선·끄덕임
+  let pointW=0;
+  function overlay(pose,walk,t,dt){
+    if(walk!=null)return;
+    pointW+=(((pose.g==='point'||pose.g==='wave')?1:0)-pointW)*(1-Math.exp(-dt/0.28));
+    const ch=S.arms.R;
+    if(pointW>0.01&&ch){
+      const tg=armTargets(pose,t),u=ch.length>=3?1:0;
+      const up=spring('upR',tg.upR,dt),fo=spring('foR',tg.foR,dt,2.0);
+      aimBlend(ch[u],ch[u+1],up,pointW);if(ch[u+2])aimBlend(ch[u+1],ch[u+2],fo,pointW);
+    }
+    head(pose,walk,t,dt,0.55);
+  }
+  // ── 동작(클립): 역할마다 모아 두고 번갈아 씀
+  const pools={idle:CL.idle,talk:CL.talk,walk:CL.walk};
   let mixer=null;const acts=new Map();
-  if(anyClip){mixer=new T.AnimationMixer(sc);
-    [CL.idle,CL.talk,CL.walk,anyClip].forEach(cp=>{if(cp&&!acts.has(cp)){const a=mixer.clipAction(cp);a.play();a.setEffectiveWeight(0);acts.set(cp,{a:a,w:0});}});}
+  if(CL.usable.length){mixer=new T.AnimationMixer(sc);
+    CL.usable.forEach(cp=>{const a=mixer.clipAction(cp);a.play();a.setEffectiveWeight(0);acts.set(cp,{a:a,w:0,t0:0});});}
+  function poolFor(key){let p=pools[key]||[];if(key==='talk'&&!p.length)p=pools.idle;if(!S&&!p.length)p=CL.usable;return p;}
+  let cur=null,curKey='',nextSwap=0;
+  function choose(key,clock){
+    const p=poolFor(key);
+    if(key!==curKey||!p.includes(cur)||(clock>=nextSwap&&p.length>1)){
+      let nx=null;
+      if(p.length===1)nx=p[0];else if(p.length>1){do{nx=p[Math.floor(rnd()*p.length)];}while(nx===cur);}
+      if(nx&&nx!==cur){const o=acts.get(nx);if(o&&o.w<0.05)o.t0=clock;}   // 새로 들어오는 동작은 처음부터
+      cur=nx;curKey=key;
+      nextSwap=cur?clock+Math.max(cur.duration,key==='talk'?3.5:6)*(1+Math.floor(rnd()*2)):Infinity;
+    }
+    return cur;
+  }
   const saved=new Map(bones.map(b=>[b,[new T.Quaternion(),new T.Vector3()]]));
   let first=true,last=null,clock=0,clipAmt=0;
-  return {root:root,height:2.3,rigged:!!S,animated:!!mixer,clipNames:(gltf.animations||[]).map(a=>a.name),
-    clipRoles:{idle:CL.idle&&CL.idle.name,talk:CL.talk&&CL.talk.name,walk:CL.walk&&CL.walk.name},skippedClips:CL.skipped,
+  const nm=a=>a.map(x=>x.name).join(', ')||null;
+  return {root:root,height:2.3,rigged:!!S,animated:!!mixer,clipNames:clips.map(a=>a.name),
+    clipRoles:{idle:nm(CL.idle),talk:nm(CL.talk),walk:nm(CL.walk)},skippedClips:CL.skipped,
     update(pose,walk,tm){
       pose=pose||{};
       // 시간: 렌더 시계를 받아 씀 (60fps 에서도 동작 속도 그대로) · 없으면 1/30초씩
       const dt=(tm!=null&&last!=null)?Math.max(0,Math.min(0.25,tm-last)):1/30;
       clock=tm!=null?tm:clock+dt;last=tm!=null?tm:null;
       const talking=pose.talk!=null?!!pose.talk:((pose.mouth&&pose.mouth!=='closed')||(pose.armL!=null?pose.armL:-48)>-20);
-      let want=walk!=null?CL.walk:(talking?(CL.talk||CL.idle):CL.idle);
-      if(!S)want=want||anyClip;                           // 뼈 부위를 못 찾은 모델은 동작으로만
-      const k=first?1:1-Math.exp(-dt/0.25);first=false;
+      const want=mixer?choose(walk!=null?'walk':talking?'talk':'idle',clock):null;
+      const k=first?1:1-Math.exp(-Math.max(dt,1e-3)/0.3);first=false;
       clipAmt+=((want?1:0)-clipAmt)*k;
       let sum=0;acts.forEach((o,cp)=>{o.w+=((cp===want?1:0)-o.w)*k;sum+=o.w;});
       reset();
       const useClip=!!mixer&&sum>1e-3&&clipAmt>1e-3;
       if(useClip){
-        acts.forEach(o=>o.a.setEffectiveWeight(o.w/sum));  // 가중치 합 1 — 모자라면 T자세가 섞여 들어감
-        mixer.setTime(clock);root.updateMatrixWorld(true);
+        acts.forEach(o=>{o.a.setEffectiveWeight(o.w/sum);const d=o.a.getClip().duration||1;o.a.time=((clock-o.t0)%d+d)%d;});   // 가중치 합 1 — 모자라면 T자세가 섞여 들어감
+        mixer.update(0);root.updateMatrixWorld(true);
         // 제자리 동작으로: 엉덩이가 앞뒤·좌우로 흘러가는 동작(root motion)은 높이만 남김
         const hp=sc.worldToLocal(hip.getWorldPosition(v1));hp.x=hip0.x;hp.z=hip0.z;sc.localToWorld(hp);
         hip.position.copy(hip.parent.worldToLocal(hp));root.updateMatrixWorld(true);
       }
       if(S){
-        if(!useClip)procedural(pose,walk);
+        if(!useClip)procedural(pose,walk,clock,dt);
         else if(clipAmt<0.999){                            // 동작 ↔ 직접 자세 사이: 뼈마다 섞음
           bones.forEach(b=>{const s=saved.get(b);s[0].copy(b.quaternion);s[1].copy(b.position);});
-          reset();procedural(pose,walk);
+          reset();procedural(pose,walk,clock,dt);
           bones.forEach(b=>{const s=saved.get(b);b.quaternion.slerp(s[0],clipAmt);b.position.lerp(s[1],clipAmt);});
-        }
+          root.updateMatrixWorld(true);
+        }else overlay(pose,walk,clock,dt);
       }
       drawMouth(pose.mouth||'closed');
     },
@@ -6072,6 +6201,27 @@ function glbPoseUpdater(T,rg,drawFace){
     if(drawFace)drawFace(pose.mouth||'closed',(pose.blink||0)>=0.5,pose.brow||0);
   };
 }
+/* 따로 올린 동작 파일(Meshy 동작 GLB)에서 클립만 꺼냄. 클립 이름 앞에 파일 이름을 붙여 역할(대기·말하기·걷기)을 알아보기 쉽게 */
+function animLabel(name){return String(name||'').replace(/\.glb$/i,'').replace(/[_ -]?(withSkin|armature)$/i,'').replace(/^(meshy[_ -]?ai[_ -]?|animation[_ -]?)+/i,'').replace(/_/g,' ').trim()||'동작';}
+async function glbExtraClips(T,files){
+  const out=[];
+  for(const f of (files||[])){
+    if(f.role==='off')continue;
+    try{
+      const g=await new Promise((res,rej)=>new T.GLTFLoader().parse(f.buf,'',res,rej));
+      (g.animations||[]).forEach((cp,i)=>{cp.name=animLabel(f.name)+((g.animations.length>1)?' · '+(cp.name||i+1):'');cp.userData={role:f.role||'auto',file:f.name};out.push(cp);});
+      g.scene.traverse(o=>{if(o.geometry)o.geometry.dispose();[].concat(o.material||[]).forEach(m=>{Object.values(m).forEach(v=>{if(v&&v.isTexture)v.dispose();});m.dispose&&m.dispose();});});   // 동작만 쓰고 모델은 버림
+    }catch(e){}
+  }
+  return out;
+}
+async function glbAnimFiles(d){
+  const out=[];
+  for(const a of ((d.char&&d.char.anims)||[])){
+    try{const b=await Store.getBlob(a.id);if(b)out.push({name:a.name,role:a.role||'auto',buf:await b.arrayBuffer()});}catch(e){}
+  }
+  return out;
+}
 /* 3D 모델 키아: 모델 + 자동 뼈대 + 원작 얼굴(입·눈 바뀜)·로고 투영 */
 async function buildGlbKia(T,blob,rig,imgs,opt){
   const url=URL.createObjectURL(blob);
@@ -6082,7 +6232,7 @@ async function buildGlbKia(T,blob,rig,imgs,opt){
   // 뼈대가 있는 모델 (Meshy 리깅 등) → 모델 안의 움직이는 동작을 쓰고, 동작이 없는 상태는 뼈 위치로 부위를 찾아
   // 방향으로 자세를 잡음 (팔꿈치·무릎까지) + 말할 때 입. 움직임 없는 T자세 클립은 건너뜀
   let skinned=null;gltf.scene.traverse(o=>{if(o.isSkinnedMesh&&!skinned)skinned=o;});
-  if(skinned)return glbSkeletonKia(T,gltf,skinned,rig,imgs);
+  if(skinned)return glbSkeletonKia(T,gltf,skinned,rig,imgs,await glbExtraClips(T,opt.anims));
   // 원본 그대로: 색·재질·텍스처·얼굴·로고를 건드리지 않고 자세용 뼈대만
   if(opt.mode==='asis')return glbAsIsKia(T,gltf,mesh);
   gltf.scene.updateMatrixWorld(true);mesh.geometry.applyMatrix4(mesh.matrixWorld);
@@ -6242,7 +6392,7 @@ const Studio={ok:false,
     const ch=d.char||{};
     if(ch.glb&&(d.kia3d==='glb'||this.wantGlb)){          // 과정 설정이 3D 모델이거나, 3D 모델을 고른 스튜디오 씬이 있을 때
       try{const rd=ch.rig?await rigData(d).catch(()=>null):null,blob=await Store.getBlob(ch.glb.id);
-        if(blob){this.glb=await buildGlbKia(T,blob,rd?rd.rig:{},rd?rd.imgs:{},{fix:ch.glbFix!==false,mode:ch.glbMode||'asis'});this.glb.root.traverse(o=>{if(o.isMesh)o.castShadow=true;});sc.add(this.glb.root);
+        if(blob){this.glb=await buildGlbKia(T,blob,rd?rd.rig:{},rd?rd.imgs:{},{fix:ch.glbFix!==false,mode:ch.glbMode||'asis',anims:await glbAnimFiles(d)});this.glb.root.traverse(o=>{if(o.isMesh)o.castShadow=true;});sc.add(this.glb.root);
           try{this.glb.update({armL:-48,armR:6,mouth:'closed'},null,0);}catch(e){sc.remove(this.glb.root);this.glb=null;throw e;}}}
       catch(e){this.glbErr=e.message;}
     }
@@ -6528,7 +6678,7 @@ Object.assign(Studio,{
     const ch=d.char||{};
     if(ch.glb&&(d.kia3d==='glb'||this.wantGlb)){
       try{const rd=ch.rig?await rigData(d).catch(()=>null):null,blob=await Store.getBlob(ch.glb.id);
-        if(blob){this.glb=await buildGlbKia(T,blob,rd?rd.rig:{},rd?rd.imgs:{},{fix:ch.glbFix!==false,mode:ch.glbMode||'asis'});this.glb.root.traverse(o=>{if(o.isMesh){o.castShadow=true;if(o.material&&'envMapIntensity' in o.material)o.material.envMapIntensity=this.envI;}});sc.add(this.glb.root);
+        if(blob){this.glb=await buildGlbKia(T,blob,rd?rd.rig:{},rd?rd.imgs:{},{fix:ch.glbFix!==false,mode:ch.glbMode||'asis',anims:await glbAnimFiles(d)});this.glb.root.traverse(o=>{if(o.isMesh){o.castShadow=true;if(o.material&&'envMapIntensity' in o.material)o.material.envMapIntensity=this.envI;}});sc.add(this.glb.root);
           try{this.glb.update({armL:-48,armR:6,mouth:'closed'},null,0);}catch(e){sc.remove(this.glb.root);this.glb=null;throw e;}}}
       catch(e){this.glbErr=e.message;}
     }
@@ -6609,7 +6759,7 @@ function makeFlat3D(){
       const T=await loadThree(true),blob=await Store.getBlob(ch.glb.id);
       if(!blob)throw new Error('저장된 3D 모델 파일을 찾지 못했습니다');
       const rd=ch.rig?await rigData(d).catch(()=>null):null;
-      const k=await buildGlbKia(T,blob,rd?rd.rig:{},rd?rd.imgs:{},{fix:ch.glbFix!==false,mode:ch.glbMode||'asis'});
+      const k=await buildGlbKia(T,blob,rd?rd.rig:{},rd?rd.imgs:{},{fix:ch.glbFix!==false,mode:ch.glbMode||'asis',anims:await glbAnimFiles(d)});
       const pl=flat3dPlace(d,W,H);
       const r=new T.WebGLRenderer({antialias:true,alpha:true,preserveDrawingBuffer:true,premultipliedAlpha:true});
       r.setPixelRatio(1);r.setSize(pl.w,pl.h,false);r.outputEncoding=T.sRGBEncoding;
@@ -6637,7 +6787,7 @@ function makeFlat3D(){
 const _glbStill={key:'',cv:null,p:null};
 function glbStill(d){
   const c=d.char||{};if(!c.glb)return Promise.resolve(null);
-  const key=c.glb.id+'|'+(c.glbMode||'asis')+'|'+(c.size||0.42);
+  const key=c.glb.id+'|'+(c.glbMode||'asis')+'|'+(c.size||0.42)+'|'+((c.anims||[]).map(a=>a.id+':'+(a.role||'auto')).join(','));
   if(_glbStill.key===key)return _glbStill.p;
   _glbStill.key=key;
   _glbStill.p=(async function(){
@@ -6646,6 +6796,7 @@ function glbStill(d){
       await f.init(d,1920,1080);
       const pose={armL:8,armR:-6,head:0,headY:0,mouth:'closed',talk:true};
       for(let i=0;i<4;i++)f.render(pose,null,i/30);
+      _glbStill.roles=f.k.clipRoles||null;
       const cv=document.createElement('canvas');cv.width=f.place.w;cv.height=f.place.h;cv.getContext('2d').drawImage(f.r.domElement,0,0);
       return cv;
     }finally{f.dispose();}
@@ -8909,6 +9060,19 @@ function renderGlbCharCard(d){
           '<input type="range" min="0.3" max="0.55" step="0.01" data-g3="size" value="'+(c.size||0.42)+'"></div>'+
         '<label style="font-size:12.5px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-top:8px;"><input type="checkbox" data-g3="chapter"'+(c.chapter?' checked':'')+' style="width:auto;"> 장 표지에도 표시</label>'+
       '</div></div>'+
+    '<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">'+
+      '<div style="font-size:13px;font-weight:600;margin-bottom:3px;">동작 파일 (선택) — 모션캡처 동작으로 더 자연스럽게</div>'+
+      '<p class="note" style="margin:0 0 8px;">Meshy 등에서 <b>같은 캐릭터</b>로 받은 동작 GLB(대기·말하기·설명하기·걷기 등)를 여러 개 올리면, 상태에 맞는 동작을 번갈아 섞어 씁니다. '+
+        '화면 가리키기·시선·끄덕임은 그 위에 덧씌웁니다. 역할은 파일 이름으로 자동으로 정하고, 직접 바꿀 수도 있습니다.</p>'+
+      ((c.anims||[]).length?'<div style="display:flex;flex-direction:column;gap:5px;margin-bottom:8px;">'+(c.anims||[]).map((a,i)=>
+        '<div class="lorarow" style="margin:0;gap:8px;"><span style="flex:1;font-size:12.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(a.name)+'">'+esc(animLabel(a.name))+
+          ' <span class="note">· '+(a.size/1048576).toFixed(1)+'MB</span></span>'+
+          '<select data-g3a="'+i+'" style="width:150px;font-size:12px;padding:4px;">'+[['auto','역할 자동 (이름으로)'],['idle','대기'],['talk','말하기·설명'],['walk','걷기'],['off','쓰지 않음']]
+            .map(o=>'<option value="'+o[0]+'"'+((a.role||'auto')===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select>'+
+          '<button class="btn small ghost" data-g3d="'+i+'">지우기</button></div>').join('')+'</div>':'')+
+      '<div class="lorarow" style="margin:0;"><button class="btn small" data-g3="animPick">동작 파일 추가</button>'+
+        '<input type="file" hidden multiple accept=".glb,model/gltf-binary" data-g3="animFile"><span class="msg" data-g3="roles"></span></div>'+
+    '</div>'+
     '<p class="note" style="margin-top:8px;">뼈대가 있는 모델(Meshy 리깅 등)은 설명·가리키기·손 흔들기 같은 몸짓을 하고, 모델 안의 대기·걷기 동작이 있으면 그것을 씁니다. '+
       '스튜디오 장면의 3D 캐릭터도 이 파일을 씁니다. 씬마다 다른 캐릭터를 쓰려면 4단계 영상 편집에서 고르세요.</p>');
   bindCharMode(el,c);
@@ -8925,8 +9089,25 @@ function renderGlbCharCard(d){
   q('mode').addEventListener('change',function(e){c.glbMode=e.target.value;persist();renderScriptStageKeepScroll();});
   q('size').addEventListener('change',function(e){c.size=parseFloat(e.target.value)||0.42;persist();renderScriptStageKeepScroll();});
   q('chapter').addEventListener('change',function(e){c.chapter=e.target.checked;persist();renderScriptStageKeepScroll();});
+  // 동작 파일
+  q('animPick').addEventListener('click',()=>q('animFile').click());
+  q('animFile').addEventListener('change',async function(e){
+    const fs=[...(e.target.files||[])];e.target.value='';if(!fs.length)return;
+    if(!c.anims)c.anims=[];
+    for(const f of fs){
+      if(f.size>300*1048576){alert(f.name+': 300MB 이하만 올릴 수 있습니다.');continue;}
+      try{const id=uid('m');await Store.putBlob(id,f);c.anims.push({id:id,name:f.name,size:f.size,role:'auto'});}
+      catch(err){alert(f.name+' 저장 실패: '+err.message);}
+    }
+    persist();renderScriptStageKeepScroll();});
+  el.querySelectorAll('[data-g3a]').forEach(sel=>sel.addEventListener('change',function(){c.anims[+sel.dataset.g3a].role=sel.value;persist();renderScriptStageKeepScroll();}));
+  el.querySelectorAll('[data-g3d]').forEach(b=>b.addEventListener('click',function(){
+    const a=c.anims.splice(+b.dataset.g3d,1)[0];if(a)Store.delBlob(a.id).catch(()=>{});persist();renderScriptStageKeepScroll();}));
   const pv=q('prev');
   glbStill(d).then(function(cv){const x=pv.getContext('2d');x.clearRect(0,0,pv.width,pv.height);
+    const ro=_glbStill.roles,rm=q('roles');
+    if(ro&&rm){const n=k=>ro[k]?ro[k].split(', ').length:0;rm.className='msg ok';
+      rm.textContent='쓰는 동작: 대기 '+n('idle')+' · 말하기 '+n('talk')+' · 걷기 '+n('walk')+(n('idle')+n('talk')+n('walk')?'':' (없음 — 자동 동작으로 움직임)');}
     if(!cv){x.fillStyle='#888';x.font='13px sans-serif';x.textAlign='center';x.fillText(c.glb?'모델을 읽지 못했습니다':'모델 없음',pv.width/2,pv.height/2);return;}
     const k=Math.min(pv.width/cv.width,pv.height/cv.height),w=cv.width*k,h=cv.height*k;x.drawImage(cv,(pv.width-w)/2,pv.height-h,w,h);});
 }
@@ -9887,7 +10068,7 @@ function paintSpecialThumb(cv,s,d){
    자동 시험과 "자가 진단"이 내부 함수를 직접 확인할 수 있게 모아 둡니다 (동작에는 영향 없음). */
 try{window.__occ={courseDesign,loadThree,loadPost,Studio,ensurePptx,drawHtmlSlide,htmlOpts,HTML_LAYOUTS,LAYOUT_LABEL,chooseLayout,
   useHtmlFor:typeof useHtmlFor==='function'?useHtmlFor:null,keyedFrame,listPaging,timelineParts,meterParts,getWorkflows,allScenes,
-  specialTtsScenes,persist,DESIGN_PRESETS,drawHotspotOverlay,hotspotParts,SFX_LIB,sfxBuffer,composeBgm,bgmList,bgmEnvelope,wavBlob,iconSvg,courseMedia:()=>course.media,drawSlide:typeof drawSlide==='function'?drawSlide:null,titleHtml,buildGlbKia,classifySkeleton};}catch(e){}
+  specialTtsScenes,persist,DESIGN_PRESETS,drawHotspotOverlay,hotspotParts,SFX_LIB,sfxBuffer,composeBgm,bgmList,bgmEnvelope,wavBlob,iconSvg,courseMedia:()=>course.media,drawSlide:typeof drawSlide==='function'?drawSlide:null,titleHtml,buildGlbKia,classifySkeleton,makeFlat3D,makeRigMotion};}catch(e){}
 
 /* ══════════ 자가 진단 ══════════
    Node 없이 도구 안에서 바로 점검: 내장 자원 · 배치 등록 · HTML5 그리기 · 3D · PPT · 워크플로우 · ComfyUI/LM Studio 연결 */
