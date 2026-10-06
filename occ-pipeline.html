@@ -1618,6 +1618,7 @@ function renderRail(){
 }
 
 function renderMain(){
+  fullPrevStop();                                      // 장 전체 미리보기는 화면을 떠나면 정리 (스튜디오·3D 렌더러를 놓아줌)
   renderHeader();
   if(activeStageId==='overview'){main.innerHTML='';return renderOverview();}
   const st=STAGES.find(s=>s.id===activeStageId);
@@ -1672,6 +1673,69 @@ function sceneSec(s){return s.audioSec||s.durationSec||estSec(s.narration)||0;}
 function editSelect(attr,opts,cur){
   return '<select '+attr+' style="width:100%;font-size:12px;padding:5px;">'+opts.map(o=>'<option value="'+o[0]+'"'+(cur===o[0]?' selected':'')+'>'+esc(o[1])+'</option>').join('')+'</select>';
 }
+/* ── 장 전체 미리보기: 렌더할 때와 같은 그림을 인코딩 없이 그때그때 그려 소리와 함께 재생 ── */
+let _fullPrev=null;
+function fullPrevStop(){if(_fullPrev){try{_fullPrev.stop();}catch(e){}try{_fullPrev.ctl&&_fullPrev.ctl.dispose();}catch(e){}_fullPrev=null;}}
+function renderFullPreview(){
+  const files=lessonFiles(),fmt=t=>{t=Math.max(0,t||0);return Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0');};
+  if(openCards.fullprev===undefined)openCards.fullprev=true;   // 처음엔 펼쳐 둠
+  const c=card('fullprev','장 전체 미리보기','렌더 없이 소리와 함께 실시간으로',
+    '<div class="lorarow" style="margin:0 0 8px;gap:8px;flex-wrap:wrap;">'+
+      '<select data-f="file" style="max-width:340px;font-size:12.5px;padding:5px;">'+files.map((f,i)=>'<option value="'+i+'">'+esc(f.label+' · '+(f.title||''))+'</option>').join('')+'</select>'+
+      '<button class="btn small primary" data-f="load">불러오기</button><span class="msg" data-f="msg"></span></div>'+
+    '<div data-f="stage" style="display:none;">'+
+      '<canvas data-f="cv" width="960" height="540" style="width:100%;max-width:960px;border-radius:8px;background:#000;display:block;"></canvas>'+
+      '<div class="lorarow" style="margin:8px 0 0;gap:8px;align-items:center;max-width:960px;">'+
+        '<button class="btn small" data-f="play" style="min-width:44px;">▶</button>'+
+        '<input type="range" data-f="seek" min="0" max="1000" value="0" style="flex:1;">'+
+        '<span class="mono" data-f="time" style="font-size:12px;white-space:nowrap;">0:00 / 0:00</span></div>'+
+      '<div data-f="chips" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;max-width:960px;"></div>'+
+      '<p class="note" style="margin-top:6px;">렌더할 때와 같은 그림을 그때그때 그립니다. 컴퓨터가 느리면 화면이 끊길 수 있지만 소리는 제 속도로 나갑니다. 장면 설정을 바꾼 뒤에는 다시 불러오세요.</p>'+
+    '</div>');
+  const q=k=>c.querySelector('[data-f="'+k+'"]'),cv=q('cv'),x=cv.getContext('2d'),msg=q('msg');
+  const P={ctl:null,ac:null,src:null,playing:false,offset:0,at:0,raf:0,drawing:false,want:null};
+  const now=()=>P.playing?P.offset+(P.ac.currentTime-P.at):P.offset;
+  function ui(t){const T=P.ctl?P.ctl.total:0;q('time').textContent=fmt(t)+' / '+fmt(T);if(!q('seek').__drag)q('seek').value=T?Math.round(t/T*1000):0;q('play').textContent=P.playing?'❚❚':'▶';}
+  async function paint(t){
+    if(!P.ctl)return;if(P.drawing){P.want=t;return;}
+    P.drawing=true;
+    try{const g=await P.ctl.draw(t);x.drawImage(g,0,0,cv.width,cv.height);}catch(e){msg.className='msg fail';msg.textContent=e.message;}
+    P.drawing=false;ui(P.playing?now():t);
+    if(P.want!=null&&!P.playing){const w=P.want;P.want=null;paint(w);}
+  }
+  function stopSrc(){if(P.src){P.src.onended=null;try{P.src.stop();}catch(e){}P.src=null;}}
+  function pause(){P.offset=Math.min(now(),P.ctl?P.ctl.total:0);P.playing=false;stopSrc();cancelAnimationFrame(P.raf);ui(P.offset);}
+  function play(){
+    if(!P.ctl)return;if(P.offset>=P.ctl.total-0.05)P.offset=0;
+    P.ac=P.ac||new (window.AudioContext||window.webkitAudioContext)();
+    stopSrc();P.src=P.ac.createBufferSource();P.src.buffer=P.ctl.audio;P.src.connect(P.ac.destination);
+    P.at=P.ac.currentTime+0.03;P.src.start(P.at,P.offset);P.playing=true;
+    P.src.onended=()=>{if(P.playing){P.playing=false;P.offset=0;cancelAnimationFrame(P.raf);ui(0);}};
+    const loop=()=>{if(!P.playing)return;const t=now();if(t>=P.ctl.total){pause();return;}if(!P.drawing)paint(t);else ui(t);P.raf=requestAnimationFrame(loop);};
+    loop();
+  }
+  function seekTo2(t){P.offset=Math.max(0,Math.min(P.ctl.total,t));if(P.playing){play();}else paint(P.offset);}
+  P.stop=()=>{P.playing=false;stopSrc();cancelAnimationFrame(P.raf);if(P.ac){P.ac.close().catch(()=>{});P.ac=null;}};
+  q('play').addEventListener('click',()=>{P.playing?pause():play();});
+  const sk=q('seek');
+  sk.addEventListener('input',()=>{sk.__drag=true;if(P.ctl){const t=sk.value/1000*P.ctl.total;q('time').textContent=fmt(t)+' / '+fmt(P.ctl.total);if(!P.playing)paint(t);}});
+  sk.addEventListener('change',()=>{sk.__drag=false;if(P.ctl)seekTo2(sk.value/1000*P.ctl.total);});
+  q('load').addEventListener('click',async function(){
+    fullPrevStop();
+    const btn=this;btn.disabled=true;msg.className='msg';msg.textContent='준비 중…';
+    try{
+      const ctl=await renderFileVideo(files[+q('file').value],{preview:true,allowSilent:true,onStatus:t=>{msg.textContent=t;}});
+      P.ctl=ctl;P.offset=0;_fullPrev=P;
+      q('stage').style.display='';
+      const ch=q('chips');ch.innerHTML='';
+      ctl.segs.forEach(sg=>{if(sg.kind!=='scene'&&sg.kind!=='chapter')return;const b=document.createElement('button');b.className='btn small ghost';
+        b.style.cssText='font-size:11px;padding:3px 7px;';b.textContent=fmt(sg.start)+' '+(sg.title||'').slice(0,14);b.addEventListener('click',()=>seekTo2(sg.start+0.01));ch.appendChild(b);});
+      msg.className='msg ok';msg.textContent='준비됨 · '+fmt(ctl.total)+(ctl.warnings.length?' · '+ctl.warnings.slice(0,2).join(' · '):'');
+      await paint(0);
+    }catch(e){msg.className='msg fail';msg.textContent=e.message;}
+    finally{btn.disabled=false;}
+  });
+}
 function renderEditStage(){
   if(talkStop)talkStop();
   const d=courseDesign(),list=editScenes();
@@ -1690,6 +1754,7 @@ function renderEditStage(){
     '<span style="flex:1"></span><span class="lbl">과정 기본 캐릭터</span><span class="val">'+esc(CHAR_MODE_LABEL[courseCharMode(d)])+'</span>'+
     '<span class="lbl">캐릭터 자료</span>'+ready.map(r=>'<span class="msg'+(r[1]?' ok':'')+'" style="font-size:12px;" title="2단계 캐릭터 카드에서 준비">'+(r[1]?'✓ ':'✗ ')+r[2]+'</span>').join('');
   main.appendChild(sum);
+  renderFullPreview();
   // ── 장면 타임라인: 길이만큼의 막대 · 끌어서 순서 바꾸기(같은 장 안) · 클릭하면 그 장면으로
   const tlc=document.createElement('div');tlc.className='card open';
   tlc.innerHTML='<div class="card-head" style="cursor:default;"><h3>장면 타임라인</h3><span class="sub">막대 길이 = 장면 길이 · 끌어서 순서 바꾸기 (같은 장 안) · 클릭하면 그 장면으로</span></div>'+
@@ -6693,7 +6758,7 @@ const Studio={ok:false,
     const r=o.rig;if(!r)return null;
     let kind=r.kind||(this.glb?'glb':(this.d.kia3d==='on'?'k3':'rig'));
     if(kind==='glb'&&!this.glb)kind=r.rig?'rig':'sprite';                     // 모델을 못 읽었으면 2D 판으로
-    if(kind==='k3'&&!(r.rig&&typeof buildKia3D==='function'))kind='rig';
+    if(kind==='k3'&&!(r.rig&&typeof buildKia3D==='function'))kind=this.glb?'glb':'rig';   // 도형 조립을 못 하면 3D 모델 → 2D 판
     if(kind==='rig'&&!r.rig)kind='sprite';
     if(kind==='sprite'&&!(r.sprite&&r.sprite.closed))kind=null;
     const three=kind==='glb'?this.glb:kind==='k3'?(this.k3||(this.k3=(()=>{const k=buildKia3D(this.T,r.rig,r.imgs);this.sc.add(k.root);return k;})())):null;
@@ -7898,7 +7963,7 @@ function studioCharKind(d,s){
   if(s&&s.charMode){const m=s.charMode;return (m==='glb'||m==='rig'||m==='sprite')?m:null;}
   if(s&&s.charHide)return null;
   if(!c.on)return null;
-  if(d.kia3d==='glb')return 'glb';
+  if(d.kia3d==='glb'||c.mode==='glb')return 'glb';     // 과정 캐릭터가 3D 모델이면 스튜디오에도 그 모델
   if(d.kia3d==='on')return 'k3';
   return (c.mode==='rig'||c.mode==='sprite'||c.mode==='glb')?c.mode:null;
 }
@@ -8223,7 +8288,8 @@ async function renderFileVideo(file,cb){
   const say=cb.onStatus||function(){};
   const d=courseDesign(),pc=partsCfg();
   const fps=Number(d.fps)===60?60:30;
-  const sup=await encoderSupport();
+  // 장 전체 미리보기(cb.preview): 인코딩 없이 같은 그림을 그리는 조종기를 돌려줌 (작은 해상도로 빠르게)
+  const sup=cb.preview?{W:cb.W||960,H:cb.H||540,video:true,audio:true}:await encoderSupport();
   if(!sup.video)throw new Error('이 브라우저는 H.264 인코딩을 지원하지 않습니다. Chrome 또는 Edge 최신 버전을 쓰세요.');
   if(!sup.audio)throw new Error('이 브라우저는 오디오 인코딩(AAC/Opus)을 지원하지 않습니다.');
   const W=sup.W,H=sup.H;
@@ -8335,30 +8401,32 @@ async function renderFileVideo(file,cb){
       let pk=0;const c0=b.getChannelData(0);for(let i=0;i<c0.length;i+=97)pk=Math.max(pk,Math.abs(c0[i]));
       stems[nm]=pk>1e-4?await audioToM4a(b,sup):null;}}
 
-  // 3) 인코더·먹서
-  const muxer=new Mp4Muxer.Muxer({
-    target:new Mp4Muxer.ArrayBufferTarget(),
-    video:{codec:'avc',width:W,height:H,frameRate:fps},
-    audio:{codec:sup.audio.mux,numberOfChannels:2,sampleRate:48000},
-    fastStart:'in-memory',firstTimestampBehavior:'offset'});
-  let encErr=null;
-  const venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>{encErr=e;}});
-  venc.configure(sup.video);
-  const aenc=new AudioEncoder({output:(c,m)=>muxer.addAudioChunk(c,m),error:e=>{encErr=e;}});
-  aenc.configure(sup.audio.cfg);
+  // 3) 인코더·먹서 (미리보기는 건너뜀)
+  let muxer=null,venc=null,aenc=null,encErr=null;
+  if(!cb.preview){
+    muxer=new Mp4Muxer.Muxer({
+      target:new Mp4Muxer.ArrayBufferTarget(),
+      video:{codec:'avc',width:W,height:H,frameRate:fps},
+      audio:{codec:sup.audio.mux,numberOfChannels:2,sampleRate:48000},
+      fastStart:'in-memory',firstTimestampBehavior:'offset'});
+    venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>{encErr=e;}});
+    venc.configure(sup.video);
+    aenc=new AudioEncoder({output:(c,m)=>muxer.addAudioChunk(c,m),error:e=>{encErr=e;}});
+    aenc.configure(sup.audio.cfg);
 
-  say('음성 인코딩 중…');
-  const c0=mixed.getChannelData(0),c1=mixed.numberOfChannels>1?mixed.getChannelData(1):c0;
-  for(let i=0;i<mixed.length;i+=1024){
-    const n=Math.min(1024,mixed.length-i);
-    const data=new Float32Array(n*2);
-    data.set(c0.subarray(i,i+n),0);data.set(c1.subarray(i,i+n),n);
-    const ad=new AudioData({format:'f32-planar',sampleRate:48000,numberOfFrames:n,numberOfChannels:2,
-      timestamp:Math.round(i/48000*1e6),data:data});
-    aenc.encode(ad);ad.close();
-    if(encErr)throw encErr;
+    say('음성 인코딩 중…');
+    const c0=mixed.getChannelData(0),c1=mixed.numberOfChannels>1?mixed.getChannelData(1):c0;
+    for(let i=0;i<mixed.length;i+=1024){
+      const n=Math.min(1024,mixed.length-i);
+      const data=new Float32Array(n*2);
+      data.set(c0.subarray(i,i+n),0);data.set(c1.subarray(i,i+n),n);
+      const ad=new AudioData({format:'f32-planar',sampleRate:48000,numberOfFrames:n,numberOfChannels:2,
+        timestamp:Math.round(i/48000*1e6),data:data});
+      aenc.encode(ad);ad.close();
+      if(encErr)throw encErr;
+    }
+    await aenc.flush();
   }
-  await aenc.flush();
 
   // 4) 프레임 그리기 + 인코딩
   const canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;
@@ -8415,9 +8483,8 @@ async function renderFileVideo(file,cb){
     }catch(e){warnings.push(sg.part.chap+'-'+(sg.index+1)+' 비주얼을 못 읽음 — '+e.message);clip=null;vis=null;}
   }
 
-  for(let f=0;f<nFrames;f++){
-    if(isCancelled()){venc.close();aenc.close();throw new Error('중단됨');}
-    if(encErr)throw encErr;
+  // 프레임 하나 그리기 (렌더와 장 전체 미리보기가 함께 씀)
+  async function drawFrame(f){
     const t=f/fps;
     si=segAt(tl,t,si);
     if(si!==curSeg){
@@ -8598,6 +8665,29 @@ async function renderFileVideo(file,cb){
     }
     // 파일 끝은 검게 닫습니다
     if(t>total-END_HOLD&&cb.layer!=='char'){ctx.fillStyle='rgba(0,0,0,'+Math.min(1,(t-(total-END_HOLD))/END_HOLD)+')';ctx.fillRect(0,0,W,H);}
+  }
+  function cleanup(){
+    if(clip){clip.frames.forEach(fr=>fr.close&&fr.close());clip=null;}
+    Object.values(videos).forEach(mv=>{mv.v.removeAttribute('src');mv.v.load();URL.revokeObjectURL(mv.url);});
+    PresVid.close();if(Studio.ok)Studio.dispose();Studio.wantGlb=false;flat3d.dispose();
+  }
+  if(cb.preview){
+    // 미리보기 조종기: 아무 시각이나 그려 줌 (뒤로 되감으면 구간 상태를 처음부터 다시)
+    let lastF=-1;
+    return {W:W,H:H,fps:fps,total:total,audio:mixed,warnings:warnings,canvas:canvas,
+      segs:tl.segs.map(sg=>({start:sg.start,dur:sg.dur,kind:sg.kind,title:sg.kind==='chapter'?((sg.part&&sg.part.chap)+'장 '+((sg.part&&sg.part.u.title)||'')):(sg.scene&&(sg.scene.title||SPECIAL_TITLE[sg.scene.kind]||sg.scene.kind))||''})),
+      async draw(t){
+        const f=Math.max(0,Math.min(nFrames-1,Math.round(t*fps)));
+        if(f<lastF||f>lastF+fps*2){si=0;curSeg=-1;fadeFrom=-1;lastCue=null;prevStudio=false;}   // 되감기·크게 건너뛰기: 전환 없이 그 장면부터
+        lastF=f;await drawFrame(f);return canvas;
+      },
+      dispose:cleanup};
+  }
+  for(let f=0;f<nFrames;f++){
+    if(isCancelled()){venc.close();aenc.close();cleanup();throw new Error('중단됨');}
+    if(encErr)throw encErr;
+    await drawFrame(f);
+    const t=f/fps;
     const vf=new VideoFrame(canvas,{timestamp:Math.round(t*1e6),duration:Math.round(1e6/fps)});
     venc.encode(vf,{keyFrame:f%(fps*2)===0});vf.close();
     while(venc.encodeQueueSize>6)await new Promise(r=>setTimeout(r,1));
@@ -8607,10 +8697,8 @@ async function renderFileVideo(file,cb){
       await new Promise(r=>setTimeout(r,0));
     }
   }
-  if(clip){clip.frames.forEach(fr=>fr.close&&fr.close());clip=null;}
-  Object.values(videos).forEach(mv=>{mv.v.removeAttribute('src');mv.v.load();URL.revokeObjectURL(mv.url);});
   say('마무리 중…');
-  await venc.flush();PresVid.close();if(Studio.ok)Studio.dispose();Studio.wantGlb=false;flat3d.dispose();
+  await venc.flush();cleanup();
   if(encErr)throw encErr;
   muxer.finalize();
   venc.close();aenc.close();
