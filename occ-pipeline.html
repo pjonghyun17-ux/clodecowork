@@ -4670,6 +4670,112 @@ function mouthTrack(env){
   }
   return out;
 }
+/* ══ 모음 입모양 (립싱크) ══
+   대본 글자를 음절로 나눠 소리 덩어리에 고르게 얹고, 음절 경계는 소리가 잦아드는 곳에 맞춥니다.
+   음절 모음으로 입 모양(ㅏ·ㅔ·ㅣ·ㅗ·ㅜ), 소리 크기로 벌림 정도, ㅁ·ㅂ·ㅍ 는 입술을 잠깐 붙입니다.
+   결과는 예전 3단계(closed·mid·open) 배열 그대로이고, 모양 정보(vis·amt·sx·sy)를 덧붙여 둡니다. */
+// 중성 21개 순서: ㅏ ㅐ ㅑ ㅒ ㅓ ㅔ ㅕ ㅖ ㅗ ㅘ ㅙ ㅚ ㅛ ㅜ ㅝ ㅞ ㅟ ㅠ ㅡ ㅢ ㅣ → [모양, 벌림 비율]
+const LIP_JUNG=[['A',1],['E',.85],['A',.95],['E',.85],['A',.75],['E',.8],['A',.75],['E',.8],['O',.8],['A',.95],['E',.85],['E',.8],['O',.8],['U',.7],['O',.85],['E',.8],['I',.7],['U',.7],['I',.55],['I',.6],['I',.65]];
+// 숫자는 한국어로 읽는 첫 음절 모양 (영·일·이·삼·사·오·육·칠·팔·구)
+const LIP_DIGIT={'0':['A',.75,0,0],'1':['I',.65,0,0],'2':['I',.65,0,0],'3':['A',.95,0,1],'4':['A',.95,0,0],'5':['O',.8,0,0],'6':['U',.7,0,0],'7':['I',.65,0,0],'8':['A',.95,1,0],'9':['U',.7,0,0]};
+const LIP_LAT={a:'A',e:'E',i:'I',o:'O',u:'U',y:'I'};
+// 모양별 입 그림 비율 [가로, 세로] — 'A'(크게 벌림)가 원래 벌린 입 그림
+const LIP_XY={A:[1,1],E:[1.12,.62],I:[1.18,.36],O:[.78,.88],U:[.58,.55],M:[1,0]};
+function lipSyllables(text){
+  const s=String(text||''),out=[];
+  for(let i=0;i<s.length;i++){
+    const c=s.charCodeAt(i),ch=s[i];
+    if(c>=0xAC00&&c<=0xD7A3){
+      const v=c-0xAC00,cho=Math.floor(v/588),jung=Math.floor((v%588)/28),jong=v%28,J=LIP_JUNG[jung];
+      out.push({s:J[0],a:J[1],on:cho===6||cho===7||cho===8||cho===17,off:jong===16||jong===17||jong===18||jong===26||jong===10||jong===14});
+    }else if(LIP_DIGIT[ch]){const D=LIP_DIGIT[ch];out.push({s:D[0],a:D[1],on:!!D[2],off:!!D[3]});}
+    else{const L=LIP_LAT[ch.toLowerCase()];if(L&&!(i>0&&LIP_LAT[s[i-1].toLowerCase()]))out.push({s:L,a:.8,on:false,off:false});}
+  }
+  return out;
+}
+/* 씬 음성 안에서 글이 놓인 구간 (조각별 길이를 알면 조각마다, 아니면 씬 전체) — 읽기용 글(read)이 있으면 그것으로 */
+function lipSegs(s,dur){
+  const P=s&&s.ttsParts;
+  if(Array.isArray(P)&&P.length&&!s.ttsFromText&&!s.audioStale&&s.audioOut&&P.every(p=>p.ref&&p.sec>0)){
+    const sum=P.reduce((a,p,i)=>a+p.sec+partGap(P,i),0),k=sum>0?dur/sum:1;let t=0;const out=[];
+    P.forEach((p,i)=>{out.push({t0:t,t1:t+p.sec*k,text:p.read||p.disp||''});t+=(p.sec+partGap(P,i))*k;});
+    return out;
+  }
+  return [{t0:0,t1:dur,text:(s&&(s.narration||''))||''}];
+}
+function lipTrack(env,fps,segs){
+  const n=env.length,vis=new Array(n).fill(null),amt=new Float32Array(n),sx=new Float32Array(n),sy=new Float32Array(n),VTH=0.13;
+  let o=0;for(let i=0;i<n;i++){const g=Math.max(0,Math.min(1,(env[i]-0.1)/0.65));o+=(g-o)*(g>o?0.75:0.5);amt[i]=o;}
+  let any=false;
+  for(const sg of (segs||[])){
+    const syl=lipSyllables(sg.text);if(!syl.length)continue;
+    const f0=Math.max(0,Math.floor(sg.t0*fps)),f1=Math.min(n,Math.ceil(sg.t1*fps));
+    const runs=[];let a=-1,gap=0;                      // 소리 덩어리 (2프레임 이하 틈은 이어 붙임)
+    for(let f=f0;f<f1;f++){
+      if(env[f]>VTH){if(a<0)a=f;gap=0;}
+      else if(a>=0){gap++;if(gap>2){runs.push([a,f-gap+1]);a=-1;gap=0;}}
+    }
+    if(a>=0)runs.push([a,f1-gap]);
+    const V=runs.reduce((x,r)=>x+r[1]-r[0],0);if(!V)continue;any=true;
+    const q=runs.map(r=>syl.length*(r[1]-r[0])/V),cnt=q.map(Math.floor);let rem=syl.length-cnt.reduce((x,y)=>x+y,0);
+    q.map((x,i)=>[x-cnt[i],i]).sort((x,y)=>y[0]-x[0]).forEach(z=>{if(rem>0){cnt[z[1]]++;rem--;}});
+    let si=0,prev=syl[0];const cl=Math.max(1,Math.round(0.06*fps));
+    runs.forEach((r,ri)=>{
+      const L=r[1]-r[0],m=cnt[ri];
+      if(!m){for(let f=r[0];f<r[1];f++)vis[f]=prev.s;return;}   // 음절이 안 돌아온 짧은 덩어리: 앞 모양 그대로
+      const b=[r[0]];                                    // 경계: 고르게 나눈 자리 근처에서 소리가 가장 작은 곳
+      for(let j=1;j<m;j++){
+        const c=r[0]+j*L/m,w=Math.max(1,Math.floor(L/m*0.35));let best=Math.round(c),bv=1e9;
+        for(let f=Math.max(b[b.length-1]+1,Math.round(c-w));f<=Math.min(r[1]-1,Math.round(c+w));f++)if(env[f]<bv){bv=env[f];best=f;}
+        b.push(Math.max(b[b.length-1]+1,best));
+      }
+      b.push(r[1]);
+      for(let j=0;j<m;j++){
+        const y=syl[si++]||prev;prev=y;const A=b[j],B=Math.max(A+1,b[j+1]);
+        for(let f=A;f<B&&f<n;f++){
+          let v=y.s;
+          if(B-A>cl+1&&((y.on&&f<A+cl)||(y.off&&f>=B-cl)))v='M';
+          vis[f]=v;if(v!=='M')amt[f]=amt[f]*(0.55+0.45*y.a);
+        }
+      }
+    });
+  }
+  // 입 그림 비율 (부드럽게 이어지게)
+  let cx=1,cy=0;
+  for(let i=0;i<n;i++){
+    const v=vis[i],xy=LIP_XY[v||'A'],on=v!=='M'&&amt[i]>0.12;
+    const tx=on?xy[0]:1,ty=on?xy[1]*(0.3+0.7*Math.min(1,amt[i]*1.15)):0;
+    cx+=(tx-cx)*0.6;cy+=(ty-cy)*(ty>cy?0.7:0.55);sx[i]=cx;sy[i]=cy;
+  }
+  const out=new Array(n);let cur='closed',hold=0;
+  for(let i=0;i<n;i++){
+    const w=sy[i]<0.1?'closed':sy[i]<0.5?'mid':'open';
+    if(w!==cur&&hold<=0){cur=w;hold=2;}else hold--;
+    out[i]=cur;
+  }
+  if(!any)return Object.assign(mouthTrack(env),{amt:amt});
+  out.vis=vis;out.amt=amt;out.sx=sx;out.sy=sy;
+  return out;
+}
+function lipTrackFor(s,env,fps,dur){return lipTrack(env,fps,lipSegs(s,dur));}
+/* 그리기 쪽: pose 에서 입 열쇠(그림 캐시용)와 비율 */
+function lipPose(pose,tr,k,state){
+  pose.mouth=state==='blink'?'closed':state;
+  if(tr&&tr.sx&&k>=0&&k<tr.length){pose.msx=tr.sx[k];pose.msy=tr.sy[k];pose.vis=tr.vis[k];pose.mopen=tr.amt[k];}
+  else if(tr&&tr.amt&&k>=0&&k<tr.length)pose.mopen=tr.amt[k];
+  return pose;
+}
+function mouthKey(pose){
+  if(!pose)return 'closed';
+  if(pose.msy!=null)return pose.msy<0.1?'closed':'v'+Math.round(pose.msx*40)/40+','+Math.round(pose.msy*40)/40;
+  return pose.mouth||'closed';
+}
+function mouthXY(key){
+  if(!key||key==='closed')return null;
+  if(key[0]==='v'){const q=key.slice(1).split(',');return [parseFloat(q[0])||1,parseFloat(q[1])||1];}
+  return [1,key==='mid'?0.55:1];
+}
+
 /* 약 3~6초마다 0.13초 깜빡임 — 입을 다물고 있을 때만 */
 function isBlink(t){
   const k=Math.floor(t/4.1),off=((k*9301+49297)%233280)/233280*2.2,bt=k*4.1+off;
@@ -5845,12 +5951,13 @@ function rigPlace(d,W,H,rig){
 function drawRig(ctx,rig,imgs,pose,x,y,scale,flip,box){
   const P=rig.pivots,d2r=Math.PI/180;
   const rot=(n,deg)=>{const p=P[n];ctx.translate(p[0],p[1]);ctx.rotate(deg*d2r);ctx.translate(-p[0],-p[1]);};
-  const sclY=(n,s)=>{const p=P[n];ctx.translate(p[0],p[1]);ctx.scale(1,s);ctx.translate(-p[0],-p[1]);};
+  const sclXY=(n,s)=>{const p=P[n];ctx.translate(p[0],p[1]);ctx.scale(s[0],s[1]);ctx.translate(-p[0],-p[1]);};
+  const mxy=mouthXY(mouthKey(pose));
   ctx.save();
   if(flip&&box){const cx=box.x+box.w/2;ctx.translate(cx,0);ctx.scale(-1,1);ctx.translate(-cx,0);}
   ctx.translate(x,y);ctx.scale(scale,scale);
   for(const n of rig.order){
-    if(n==='mouth'&&pose.mouth==='closed')continue;
+    if(n==='mouth'&&!mxy)continue;
     const im=imgs[n];if(!im)continue;
     ctx.save();
     if(n!=='shadow'){
@@ -5860,7 +5967,7 @@ function drawRig(ctx,rig,imgs,pose,x,y,scale,flip,box){
     if(n==='armL')rot('armL',pose.armL||0);
     if(n==='armR')rot('armR',pose.armR||0);
     if(n==='head'||(rig.parent||{})[n]==='head'){ctx.translate(0,pose.headY||0);rot('head',pose.head||0);}
-    if(n==='mouth')sclY('mouth',pose.mouth==='mid'?0.55:1);
+    if(n==='mouth')sclXY('mouth',mxy);
     if((n==='eyeL'||n==='eyeR')&&(pose.blink||0)>=0.5){          // 감은 눈: 아래로 휜 곡선
       const p=P[n],w=rig.eyeW||27;ctx.lineWidth=rig.line||10;ctx.lineCap='round';ctx.strokeStyle='#000';
       ctx.beginPath();ctx.moveTo(p[0]-w,p[1]);ctx.quadraticCurveTo(p[0],p[1]+w*0.55,p[0]+w,p[1]);ctx.stroke();
@@ -6402,7 +6509,7 @@ function buildKia3D(T,rig,imgs){
     if(blink){x.lineWidth=rig.line||10;x.lineCap='round';x.strokeStyle='#000';
       ['eyeL','eyeR'].forEach(n=>{const p=P[n],w=rig.eyeW||27;x.beginPath();x.moveTo(p[0]-w,p[1]);x.quadraticCurveTo(p[0],p[1]+w*0.55,p[0]+w,p[1]);x.stroke();});}
     else{x.drawImage(imgs.eyeL,0,0);x.drawImage(imgs.eyeR,0,0);}
-    if(mouth!=='closed'){const p=P.mouth;x.save();x.translate(p[0],p[1]);x.scale(1,mouth==='mid'?0.55:1);x.translate(-p[0],-p[1]);x.drawImage(imgs.mouth,0,0);x.restore();}
+    const mxy=mouthXY(mouth);if(mxy){const p=P.mouth;x.save();x.translate(p[0],p[1]);x.scale(mxy[0],mxy[1]);x.translate(-p[0],-p[1]);x.drawImage(imgs.mouth,0,0);x.restore();}
     x.restore();faceT.needsUpdate=true;
   }
   drawFace('closed',false,0);
@@ -6445,7 +6552,7 @@ function buildKia3D(T,rig,imgs){
         hips.position.y=0.44+Math.abs(Math.cos(walk))*0.07;hips.rotation.z=s*0.05;
         tailP.rotation.y=0.35+s*0.25;
       }else{legR.rotation.x=legL.rotation.x=0;hips.rotation.z=0;tailP.rotation.y=0.35+Math.sin(Date.now()*0)*0;}
-      drawFace(pose.mouth||'closed',(pose.blink||0)>=0.5,pose.brow||0);
+      drawFace(mouthKey(pose),(pose.blink||0)>=0.5,pose.brow||0);
     },
     setOpacity(a){mats.forEach(m=>{m.opacity=a;});root.visible=a>0.01;}
   };
@@ -6641,11 +6748,25 @@ function glbFindMouth(T,sk,S){
   const hy=S.head[0].getWorldPosition(new T.Vector3()).y,v=new T.Vector3();
   let zmax=-1e9;const cand=[];
   for(let i=0;i<P.count;i++){v.fromBufferAttribute(P,i).applyMatrix4(M);if(v.y>hy){zmax=Math.max(zmax,v.z);cand.push(i);}}
-  const hx=S.head[0].getWorldPosition(new T.Vector3()).x,dark=[],light=[];
+  const hx=S.head[0].getWorldPosition(new T.Vector3()).x,dark=[],light=[],red=[];
   cand.forEach(i=>{v.fromBufferAttribute(P,i).applyMatrix4(M);
     if(v.z<zmax-0.22*sz.z||Math.abs(v.x-hx)>0.08*sz.x)return;
     const qx=Math.min(w-1,Math.round(U.getX(i)*w)),qy=Math.min(h-1,Math.round(U.getY(i)*h)),q=(qy*w+qx)*4,l=0.299*px[q]+0.587*px[q+1]+0.114*px[q+2];
-    (l<75?dark:light).push([v.x,v.y,v.z,px[q],px[q+1],px[q+2]]);});
+    const pt=[v.x,v.y,v.z,px[q],px[q+1],px[q+2]];
+    (l<75?dark:light).push(pt);
+    if(px[q]>90&&px[q]-px[q+1]>28&&px[q]-px[q+2]>18)red.push(pt);});
+  // 칠한 입술(분홍·빨강)이 뚜렷하면 그 무리가 입 (어두운 점만 보면 콧구멍 그림자를 입으로 잡기도 함)
+  if(red.length>=8){
+    const ys=red.map(p=>p[1]).sort((a,b)=>a-b),my=ys[Math.floor(ys.length/2)];
+    const lips=red.filter(p=>Math.abs(p[1]-my)<0.025*sz.y);
+    if(lips.length>=6){
+      const m=lips.reduce((a,p)=>[a[0]+p[0],a[1]+p[1],a[2]+p[2]],[0,0,0]).map(t=>t/lips.length);
+      const xs=lips.map(p=>p[0]),mw=Math.max(0.035*sz.x,Math.max(...xs)-Math.min(...xs));
+      const med=a=>[0,1,2].map(j=>{const q=a.map(p=>p[3+j]).sort((u,v)=>u-v);return q[Math.floor(q.length/2)];});
+      const near=light.filter(p=>Math.abs(p[1]-m[1])<mw&&Math.abs(p[0]-m[0])<mw*1.2&&!(p[3]-p[4]>28&&p[3]-p[5]>18));
+      return {pos:new T.Vector3(m[0],m[1],m[2]),w:mw,color:near.length?med(near):[235,215,205],lip:med(lips)};
+    }
+  }
   if(dark.length<10)return null;
   dark.sort((a,b)=>b[1]-a[1]);                          // 위(코)에서 아래(입)로
   let gi=-1,gap=0;for(let i=1;i<dark.length;i++){const d=dark[i-1][1]-dark[i][1];if(d>gap){gap=d;gi=i;}}
@@ -6716,10 +6837,68 @@ function glbAdaptClip(T,clip,sc,hipName,hipRest){
    ② 자동 동작: 클립이 없는 상태를 채움 — 숨쉬기·무게중심 옮기기(척추 S자)·스프링으로 따라가는 팔·팔 들면 어깨도·
       음성 강세에 맞춘 손짓·고개 끄덕임·시선(가리킬 땐 화면, 다시 카메라)·몸짓마다 조금씩 다른 변주
    클립 위에는 화면 가리키기(오른팔)와 시선·끄덕임만 덧씌워, 모션캡처 동작은 살리면서 화면을 가리킬 수 있게 합니다. */
+/* 모델 안의 입 표정(블렌드셰이프)으로 립싱크: Oculus·Ready Player 계열(viseme_aa…), VRoid(Fcl_MTH_A…),
+   VRChat(vrc.v_aa…), ARKit 52(jawOpen·mouthFunnel·mouthPucker…) 이름을 알아봅니다. 없으면 null → 예전처럼 입 그림을 덮어 씀 */
+const LIP_MORPH=[
+  {A:[[/^viseme_aa$/i,1]],E:[[/^viseme_e$/i,1]],I:[[/^viseme_i$/i,1]],O:[[/^viseme_o$/i,1]],U:[[/^viseme_u$/i,1]],M:[[/^viseme_pp$/i,1]]},
+  {A:[[/mth_a$/i,1]],E:[[/mth_e$/i,1]],I:[[/mth_i$/i,1]],O:[[/mth_o$/i,1]],U:[[/mth_u$/i,1]]},
+  {A:[[/v_aa$/i,1]],E:[[/v_e$/i,1]],I:[[/v_ih$/i,1]],O:[[/v_oh$/i,1]],U:[[/v_ou$/i,1]],M:[[/v_pp$/i,1]]},
+  {A:[[/^jawopen$/i,.65]],E:[[/^jawopen$/i,.3],[/^mouthstretch_?(left|l)$/i,.45],[/^mouthstretch_?(right|r)$/i,.45]],
+   I:[[/^jawopen$/i,.12],[/^mouthsmile_?(left|l)$/i,.55],[/^mouthsmile_?(right|r)$/i,.55]],
+   O:[[/^jawopen$/i,.4],[/^mouthfunnel$/i,.65]],U:[[/^jawopen$/i,.12],[/^mouthpucker$/i,.8],[/^mouthfunnel$/i,.2]]},
+  {A:[[/^(mouth_?open|mouthopen|open_?mouth|aa|a)$/i,1]]}           // 입 벌림 하나만 있는 모델
+];
+function glbLipMorphs(T,root){
+  const ms=[];root.traverse(o=>{if(o.isMesh&&o.morphTargetDictionary&&o.morphTargetInfluences)ms.push(o);});
+  if(!ms.length)return null;
+  for(const sch of LIP_MORPH){
+    const map={};let hits=0;
+    Object.keys(sch).forEach(shape=>{const L=[];
+      sch[shape].forEach(([re,w])=>ms.forEach(m=>Object.keys(m.morphTargetDictionary).forEach(nm=>{if(re.test(nm)){L.push([m,m.morphTargetDictionary[nm],w]);}})));
+      if(L.length){map[shape]=L;hits++;}});
+    if(!map.A||hits<(sch.E?2:1))continue;              // 이 이름 규칙에 맞는 모델
+    const slots=new Map();Object.values(map).forEach(L=>L.forEach(([m,i])=>slots.set(m.uuid+':'+i,{m:m,i:i,v:0})));
+    ms.forEach(m=>[].concat(m.material).forEach(mt=>{if(mt&&'morphTargets' in mt)mt.morphTargets=true;}));   // r128: 재질에서 켜야 보임
+    return {shapes:Object.keys(map),
+      apply(pose,dt){
+        let vis=pose&&pose.vis,open=pose&&pose.mopen!=null?pose.mopen:0;
+        if(!vis){const k=pose&&pose.mouth;vis=k&&k!=='closed'?'A':null;open=k==='open'?0.9:k==='mid'?0.5:0;}
+        if(vis&&!map[vis]&&vis!=='M')vis='A';
+        const want=new Map();
+        if(vis&&(vis==='M'?map.M:open>0.08))(map[vis]||[]).forEach(([m,i,w])=>{const k=m.uuid+':'+i;want.set(k,(want.get(k)||0)+w*(vis==='M'?0.8:Math.min(1,open*1.2)));});
+        const a=1-Math.exp(-Math.max(dt||1/30,1e-3)/0.045);
+        slots.forEach((s,k)=>{s.v+=((want.get(k)||0)-s.v)*a;s.m.morphTargetInfluences[s.i]=Math.max(0,Math.min(1,s.v));});
+      }};
+  }
+  return null;
+}
+/* VRM(VRoid 등): 파일에 적힌 사람 뼈 이름표로 뼈대를 바로 잡음 (머리카락·치마 뼈가 많아 모양으로는 헷갈림) */
+function vrmSkeleton(T,gltf){
+  const js=gltf.parser&&gltf.parser.json,ex=js&&js.extensions||{};
+  let hb=null;
+  if(ex.VRMC_vrm&&ex.VRMC_vrm.humanoid)hb=ex.VRMC_vrm.humanoid.humanBones;                       // VRM 1.0 {hips:{node}}
+  else if(ex.VRM&&ex.VRM.humanoid&&Array.isArray(ex.VRM.humanoid.humanBones)){hb={};ex.VRM.humanoid.humanBones.forEach(b=>{hb[b.bone]={node:b.node};});}   // VRM 0.x
+  if(!hb)return null;
+  const byIdx=new Map();if(gltf.parser.associations)gltf.parser.associations.forEach((v,o)=>{if(v&&v.nodes!=null)byIdx.set(v.nodes,o);else if(v&&v.type==='nodes')byIdx.set(v.index,o);});
+  const B=n=>{const h=hb[n];if(!h||h.node==null)return null;let o=byIdx.get(h.node);
+    if(!o&&js.nodes[h.node]){const nm=T.PropertyBinding.sanitizeNodeName(js.nodes[h.node].name||'');o=gltf.scene.getObjectByName(nm);}
+    return o&&o.isBone?o:null;};
+  const hips=B('hips'),chest=B('upperChest')||B('chest')||B('spine'),head=B('head');
+  if(!hips||!chest||!head)return null;
+  const arm=s=>{const u=B(s+'UpperArm'),l=B(s+'LowerArm'),h=B(s+'Hand');if(!u||!l)return null;return [B(s+'Shoulder')||u,u,l].concat(h?[h]:[]);};
+  const leg=s=>{const u=B(s+'UpperLeg'),l=B(s+'LowerLeg');if(!u||!l)return null;return [u,l].concat([B(s+'Foot'),B(s+'Toes')].filter(Boolean));};
+  const arms={},legs={};const aL=arm('left'),aR=arm('right'),lL=leg('left'),lR=leg('right');
+  if(aL)arms.L=aL;if(aR)arms.R=aR;if(lL)legs.L=lL;if(lR)legs.R=lR;
+  let root=hips;while(root.parent&&root.parent.isBone)root=root.parent;
+  return {chest:chest,head:[B('neck'),head].filter(Boolean),arms:arms,legs:legs,pelvis:hips,root:root,vrm:true};
+}
 function glbSkeletonKia(T,gltf,sk,rig,imgs,extra){
-  const sc=gltf.scene;sc.updateMatrixWorld(true);
+  const sc=gltf.scene;
+  const gx=gltf.parser&&gltf.parser.json&&gltf.parser.json.extensions||{};
+  if(gx.VRM&&!gx.VRMC_vrm)sc.rotation.y+=Math.PI;       // VRM 0.x 는 뒤(-Z)를 보고 있어 돌려 세움
+  sc.updateMatrixWorld(true);
   const box=glbBox(T,sc),sz=box.getSize(new T.Vector3()),c=box.getCenter(new T.Vector3());
-  let S=null,sErr=null;try{S=classifySkeleton(T,sk);}catch(e){sErr=e;}
+  let S=null,sErr=null;try{S=vrmSkeleton(T,gltf)||classifySkeleton(T,sk);}catch(e){sErr=e;}
   const skins=[];sc.traverse(o=>{if(o.isSkinnedMesh)skins.push(o);});
   const bones=[...new Set([].concat(...skins.map(m=>m.skeleton.bones)))];
   let hip=S&&S.pelvis?S.pelvis:bones[0];if(!S||!S.pelvis)while(hip.parent&&hip.parent.isBone)hip=hip.parent;
@@ -6730,9 +6909,10 @@ function glbSkeletonKia(T,gltf,sk,rig,imgs,extra){
   const spine=[];if(S){let x=S.chest;while(x&&x.isBone&&x!==S.pelvis){spine.unshift(x);x=x.parent;}}   // 골반 위 ~ 가슴
   // ── 입: 말할 때만 원작의 벌린 입을 덮어 그림 (다물면 모델 원래 입)
   let mouthDecal=null,drawMouth=()=>{};
-  if(S)try{
+  const lipM=glbLipMorphs(T,gltf.scene);                // 입 표정이 든 모델이면 그것으로, 아니면 입 그림 덮기
+  if(S&&!lipM)try{
     const mf=glbFindMouth(T,sk,S);
-    if(mf&&imgs&&imgs.mouth&&T.DecalGeometry){
+    if(mf&&T.DecalGeometry){                           // 2D 리그 입 그림이 없으면 입을 직접 그림
       const MB=[270,340,410,440],mc=document.createElement('canvas');mc.width=280;mc.height=200;
       const mt=new T.CanvasTexture(mc);mt.encoding=T.sRGBEncoding;
       const plain=new T.Mesh(sk.geometry,sk.material);plain.matrixWorld.copy(skinRestMatrix(T,sk));plain.matrixAutoUpdate=false;   // 그려지는 자리 그대로
@@ -6741,15 +6921,28 @@ function glbSkeletonKia(T,gltf,sk,rig,imgs,extra){
         new T.MeshStandardMaterial({map:mt,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-4,roughness:.85}));
       const hb=S.head[Math.min(1,S.head.length-1)];hb.updateMatrixWorld(true);
       mouthDecal.geometry.applyMatrix4(new T.Matrix4().copy(hb.matrixWorld).invert());hb.add(mouthDecal);mouthDecal.visible=false;
+      mouthDecal.renderOrder=10;                           // 몸(반투명 처리)보다 나중에 그려야 얼굴에 가려지지 않음
       let last='';
       drawMouth=function(state){
-        if(state==='closed'){mouthDecal.visible=false;last='closed';return;}
+        const mxy=mouthXY(state);
+        if(!mxy){mouthDecal.visible=false;last='closed';return;}
         mouthDecal.visible=true;if(state===last)return;last=state;
         const x=mc.getContext('2d');x.clearRect(0,0,mc.width,mc.height);
-        // 원래 입 선(가운데 높이)만 얇게 가리고, 벌린 입은 그 선에서 아래로 열림 — 위쪽 코는 건드리지 않음
-        x.save();x.filter='blur(5px)';x.fillStyle='rgb('+mf.color.join(',')+')';x.beginPath();x.ellipse(140,100,104,24,0,0,Math.PI*2);x.fill();x.restore();   // 테두리 흐리게 섞음
-        const bw=MB[2]-MB[0],bh=MB[3]-MB[1],sc2=176/bw;x.save();x.translate(140,84);x.scale(1,state==='mid'?0.62:1);
-        x.drawImage(imgs.mouth,MB[0],MB[1],bw,bh,-bw*sc2/2,0,bw*sc2,bh*sc2);x.restore();
+        // 원래 입 선(가운데 높이)만 얇게 가리고, 벌린 입은 그 선에서 아래로 열림 — 위쪽 코는 건드리지 않음 (칠한 입술 모델은 입술을 그대로 둠)
+        if(!mf.lip){x.save();x.filter='blur(5px)';x.fillStyle='rgb('+mf.color.join(',')+')';x.beginPath();x.ellipse(140,100,104,24,0,0,Math.PI*2);x.fill();x.restore();}   // 테두리 흐리게 섞음
+        if(imgs&&imgs.mouth){
+          const bw=MB[2]-MB[0],bh=MB[3]-MB[1],sc2=176/bw;x.save();x.translate(140,84);x.scale(mxy[0],mxy[1]);
+          x.drawImage(imgs.mouth,MB[0],MB[1],bw,bh,-bw*sc2/2,0,bw*sc2,bh*sc2);x.restore();
+        }else{                                          // 그린 입: 입술 테두리 · 입 안 · 윗니 · 혀 (모음 모양대로 가로·세로)
+          const w=58*mxy[0],h=Math.max(3,52*mxy[1]),lip=mf.lip||mf.color.map(v=>Math.round(v*0.62));
+          x.save();x.translate(140,mf.lip?100-h/2:92);       // 입술 모델: 입술 선 가운데에서 위아래로
+          x.fillStyle='rgb('+lip.join(',')+')';x.beginPath();x.ellipse(0,h/2,w+5,h/2+5,0,0,Math.PI*2);x.fill();
+          x.fillStyle='#4a141b';x.beginPath();x.ellipse(0,h/2,w,h/2,0,0,Math.PI*2);x.fill();
+          x.save();x.beginPath();x.ellipse(0,h/2,w,h/2,0,0,Math.PI*2);x.clip();
+          if(h>9){x.fillStyle='#f3eee6';x.fillRect(-w*0.72,-2,w*1.44,Math.min(h*0.24,11));}
+          if(h>16){x.fillStyle='#b04a55';x.beginPath();x.ellipse(0,h*0.92,w*0.62,h*0.28,0,0,Math.PI*2);x.fill();}
+          x.restore();x.restore();
+        }
         mt.needsUpdate=true;};
     }
   }catch(e){}
@@ -6889,7 +7082,7 @@ function glbSkeletonKia(T,gltf,sk,rig,imgs,extra){
   const saved=new Map(bones.map(b=>[b,[new T.Quaternion(),new T.Vector3()]]));
   let first=true,last=null,clock=0,clipAmt=0;
   const nm=a=>a.map(x=>x.name).join(', ')||null;
-  return {root:root,height:2.3,rigged:!!S,animated:!!mixer,clipNames:clips.map(a=>a.name),
+  return {root:root,height:2.3,rigged:!!S,animated:!!mixer,clipNames:clips.map(a=>a.name),lipShapes:lipM?lipM.shapes:null,
     clipRoles:{idle:nm(CL.idle),talk:nm(CL.talk),walk:nm(CL.walk)},skippedClips:CL.skipped,
     update(pose,walk,tm){
       pose=pose||{};
@@ -6919,7 +7112,7 @@ function glbSkeletonKia(T,gltf,sk,rig,imgs,extra){
           root.updateMatrixWorld(true);
         }else overlay(pose,walk,clock,dt);
       }
-      drawMouth(pose.mouth||'closed');
+      if(lipM)lipM.apply(pose,dt);else drawMouth(mouthKey(pose));
     },
     setOpacity(a){mats.forEach(m=>{m.opacity=a;});root.visible=a>0.01;}};
 }
@@ -6946,7 +7139,7 @@ function glbPoseUpdater(T,rg,drawFace){
       B.legR.rotation.x=s*0.5;B.legL.rotation.x=-s*0.5;B.armR.rotation.set(0,s*0.35,72*d2r);B.armL.rotation.set(0,s*0.35,-72*d2r);
       B.root.position.y=rg.J.crotch+Math.abs(Math.cos(walk))*0.02*rg.J.H;B.tail.rotation.y=s*0.35;B.head.rotation.set(0,0,s*0.04);
     }else{B.legR.rotation.x=B.legL.rotation.x=0;B.tail.rotation.y=0;}
-    if(drawFace)drawFace(pose.mouth||'closed',(pose.blink||0)>=0.5,pose.brow||0);
+    if(drawFace)drawFace(mouthKey(pose),(pose.blink||0)>=0.5,pose.brow||0);
   };
 }
 /* 따로 올린 동작 파일(Meshy 동작 GLB)에서 클립만 꺼냄. 클립 이름 앞에 파일 이름을 붙여 역할(대기·말하기·걷기)을 알아보기 쉽게 */
@@ -7005,7 +7198,7 @@ async function buildGlbKia(T,blob,rig,imgs,opt){
     if(blink){['eyeL','eyeR'].forEach(nm=>{const p=P[nm],w=rig.eyeW||27;x.fillStyle='#fcfcfc';x.beginPath();x.ellipse(p[0],p[1],w+8,w+12,0,0,Math.PI*2);x.fill();
       x.lineWidth=rig.line||10;x.lineCap='round';x.strokeStyle='#000';x.beginPath();x.moveTo(p[0]-w,p[1]);x.quadraticCurveTo(p[0],p[1]+w*0.55,p[0]+w,p[1]);x.stroke();});}
     else{x.drawImage(imgs.eyeL,0,0);x.drawImage(imgs.eyeR,0,0);}
-    if(mouth!=='closed'){const p=P.mouth;x.save();x.translate(p[0],p[1]);x.scale(1,mouth==='mid'?0.55:1);x.translate(-p[0],-p[1]);x.drawImage(imgs.mouth,0,0);x.restore();}
+    const mxy=mouthXY(mouth);if(mxy){const p=P.mouth;x.save();x.translate(p[0],p[1]);x.scale(mxy[0],mxy[1]);x.translate(-p[0],-p[1]);x.drawImage(imgs.mouth,0,0);x.restore();}
     x.restore();faceT.needsUpdate=true;
   }
   drawFace('closed',false,0);
@@ -7080,7 +7273,7 @@ async function buildGlbKia(T,blob,rig,imgs,opt){
         B.legR.rotation.x=s*0.5;B.legL.rotation.x=-s*0.5;B.armR.rotation.set(0,s*0.35,72*d2r);B.armL.rotation.set(0,s*0.35,-72*d2r);
         B.root.position.y=rg.J.crotch+Math.abs(Math.cos(walk))*0.02*rg.J.H;B.tail.rotation.y=s*0.35;B.head.rotation.set(0,0,s*0.04);
       }else{B.legR.rotation.x=B.legL.rotation.x=0;B.tail.rotation.y=0;}
-      drawFace(pose.mouth||'closed',(pose.blink||0)>=0.5,pose.brow||0);
+      drawFace(mouthKey(pose),(pose.blink||0)>=0.5,pose.brow||0);
     },
     setOpacity(a){mats.forEach(m=>{m.opacity=a;});root.visible=a>0.01;}};
 }
@@ -7544,7 +7737,7 @@ function glbStill(d){
       await f.init(d,1920,1080);
       const pose={armL:8,armR:-6,head:0,headY:0,mouth:'closed',talk:true};
       for(let i=0;i<4;i++)f.render(pose,null,i/30);
-      _glbStill.roles=f.k.clipRoles||null;
+      _glbStill.roles=f.k.clipRoles||null;_glbStill.lip=f.k.lipShapes||null;
       const cv=document.createElement('canvas');cv.width=f.place.w;cv.height=f.place.h;cv.getContext('2d').drawImage(f.r.domElement,0,0);
       return cv;
     }finally{f.dispose();}
@@ -8770,7 +8963,7 @@ async function renderFileVideo(file,cb){
   }
   const tl=filesTimeline(file.parts,durs,tlOpts(d));
   const envs=buffers.map(pb=>pb.map((b,i)=>b?audioEnvelope(b,fps):null));
-  const tracks=envs.map(pe=>pe.map(e=>e?mouthTrack(e):null));
+  const tracks=envs.map((pe,pi)=>pe.map((e,i)=>e?lipTrackFor(file.parts[pi].u.scenes[i],e,fps,buffers[pi][i].duration):null));   // 대본 모음에 맞춘 입모양
   const partIdx=new Map(file.parts.map((p,i)=>[p,i]));
 
   // 2) 음성 믹스 (+ 인트로·아웃트로 배경음악)
@@ -9029,12 +9222,12 @@ async function renderFileVideo(file,cb){
       const v=await PresVid.frameAt(cur.trim&&PresVid.el?trimMap(cur.trim,PresVid.dur,local):local);
       drawPresenter(ctx,W,H,d,v,sg.pres.place,presState);
     }else if(drawC&&(cm==='rig'||cm==='sprite'||cm==='glb')&&!(sg.scene&&sg.scene.__video)){
-      let state='closed',level=0;
+      let state='closed',level=0,ltr=null,lk=-1;
       if(sg.kind==='scene'){
         const pi=partIdx.get(sg.part),tr=tracks[pi][sg.index],ev=envs[pi][sg.index];
         if(tr&&t>=sg.audioStart&&t<sg.audioStart+sg.audioDur){
           const k=Math.floor((t-sg.audioStart)*fps);
-          if(k>=0&&k<tr.length){state=tr[k];level=ev[k];}
+          if(k>=0&&k<tr.length){state=tr[k];level=ev[k];ltr=tr;lk=k;}
         }
       }
       let dx=0;
@@ -9048,7 +9241,7 @@ async function renderFileVideo(file,cb){
             gest=(sc.gesture&&sc.gesture!=='auto')?sc.gesture:gestureFor(cue.text,sc.kind);}
           if(!talking&&t>sg.audioStart+sg.audioDur+1.0)gest='rest';
         }else gest='present';
-        const pose=rigMove(t,1/fps,gest,level,talking);pose.mouth=state==='blink'?'closed':state;pose.talk=talking;
+        const pose=lipPose(rigMove(t,1/fps,gest,level,talking),ltr,lk,state);pose.talk=talking;
         if(cm==='rig')drawRig(ctx,rd.rig,rd.imgs,pose,place.ox,place.oy,place.sc,d.char.flip,place.box);
         else{const P3=flat3d.place;ctx.drawImage(flat3d.render(pose,null,t),P3.x,P3.y,P3.w,P3.h);}
       }else{
@@ -9066,13 +9259,13 @@ async function renderFileVideo(file,cb){
       let rigO=null;
       const kind=segKinds[si];
       if(kind){
-        const pi=partIdx.get(sg.part),tr=tracks[pi][sg.index],ev=envs[pi][sg.index];let state='closed',level=0;
+        const pi=partIdx.get(sg.part),tr=tracks[pi][sg.index],ev=envs[pi][sg.index];let state='closed',level=0,lk=-1;
         const talking=t>=sg.audioStart&&t<sg.audioStart+sg.audioDur;
-        if(tr&&talking){const k=Math.floor((t-sg.audioStart)*fps);if(k>=0&&k<tr.length){state=tr[k];level=ev[k];}}
+        if(tr&&talking){const k=Math.floor((t-sg.audioStart)*fps);if(k>=0&&k<tr.length){state=tr[k];level=ev[k];lk=k;}}
         const cue=sg.cues.find(c=>t>=c.start&&t<c.end);
         if(cue&&cue!==lastCue){lastCue=cue;const sc=sg.scene;gest=(sc.gesture&&sc.gesture!=='auto')?sc.gesture:gestureFor(cue.text,sc.kind);}
         if(!talking)gest=(sg.walkStart!=null&&t>=sg.walkStart-0.3)?'rest':'present';
-        const pose=rigMove(t,1/fps,gest,level,talking);pose.mouth=state==='blink'?'closed':state;pose.talk=talking;
+        const pose=lipPose(rigMove(t,1/fps,gest,level,talking),tr,lk,state);pose.talk=talking;
         if(kind==='sprite'&&state==='closed'&&cimgs&&cimgs.blink&&isBlink(t))state='blink';
         rigO={rig:rd?rd.rig:null,imgs:rd?rd.imgs:null,pose:pose,flip:d.char.flip,kind:kind,sprite:cimgs,state:state,level:level,t:t};
       }
@@ -9613,7 +9806,7 @@ async function talkPreview(cv,x,onEnd){
   let f3=null;if(cm==='glb'){f3=makeFlat3D();await f3.init(d,cv.width,cv.height);}
   const ac=new (window.AudioContext||window.webkitAudioContext)();
   const buf=await ac.decodeAudioData(await (await sceneAudioBlob(s)).arrayBuffer());
-  const env=audioEnvelope(buf,30),tr=mouthTrack(env);
+  const env=audioEnvelope(buf,30),tr=lipTrackFor(s,env,30,buf.duration);
   const vis=s.srcImage?await loadBitmap(s.srcImage,'input').catch(()=>null):null;
   const u=project.units[x.ui],W=cv.width,H=cv.height,ctx=cv.getContext('2d');
   const place=rd?rigPlace(d,W,H,rd.rig):null;
@@ -9654,7 +9847,7 @@ async function talkPreview(cv,x,onEnd){
       if(place||f3){
         const c=cues.find(q=>t>=q.start&&t<q.end);
         if(c&&c!==lastC){lastC=c;gest=(s.gesture&&s.gesture!=='auto')?s.gesture:gestureFor(c.text,s.kind);}
-        const pose=move(t,Math.max(0.001,t-lastT),gest,env[k]||0,t<buf.duration);pose.mouth=st==='blink'?'closed':st;pose.talk=t<buf.duration;lastT=t;
+        const pose=lipPose(move(t,Math.max(0.001,t-lastT),gest,env[k]||0,t<buf.duration),tr,k,st);pose.talk=t<buf.duration;lastT=t;
         if(place)drawRig(ctx,rd.rig,rd.imgs,pose,place.ox,place.oy,place.sc,d.char.flip,place.box);
         else{const P3=f3.place;ctx.drawImage(f3.render(pose,null,t),P3.x,P3.y,P3.w,P3.h);}
       }else if(box&&imgs)drawCharacter(ctx,box,imgs,st,env[k]||0,t,d.char.flip,W);
@@ -9941,7 +10134,7 @@ function renderGlbCharCard(d){
       '<div style="flex:1;min-width:240px;">'+
         '<div class="lorarow" style="margin:0 0 8px;"><button class="btn small" data-g3="pick">'+(c.glb?'모델 바꾸기':'GLB 올리기')+'</button>'+
           (c.glb?'<span class="msg ok">'+esc(c.glb.name)+' · '+(c.glb.size/1048576).toFixed(1)+'MB</span>':'<span class="msg">모델 없음</span>')+
-          '<input type="file" hidden accept=".glb,model/gltf-binary" data-g3="file"></div>'+
+          '<input type="file" hidden accept=".glb,.vrm,model/gltf-binary" data-g3="file"></div>'+
         '<div class="field" style="margin-bottom:8px;"><label>모델 방식</label><select data-g3="mode">'+
           '<option value="asis"'+((c.glbMode||'asis')==='asis'?' selected':'')+'>원본 그대로 — Meshy 등 전문 도구 모델</option>'+
           '<option value="fix"'+(c.glbMode==='fix'?' selected':'')+'>자동 보정 — TRELLIS 등 AI 생성 모델 (2D 리그 필요)</option></select></div>'+
@@ -9960,9 +10153,10 @@ function renderGlbCharCard(d){
             .map(o=>'<option value="'+o[0]+'"'+((a.role||'auto')===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select>'+
           '<button class="btn small ghost" data-g3d="'+i+'">지우기</button></div>').join('')+'</div>':'')+
       '<div class="lorarow" style="margin:0;"><button class="btn small" data-g3="animPick">동작 파일 추가</button>'+
-        '<input type="file" hidden multiple accept=".glb,model/gltf-binary" data-g3="animFile"><span class="msg" data-g3="roles"></span></div>'+
+        '<input type="file" hidden multiple accept=".glb,.vrm,model/gltf-binary" data-g3="animFile"><span class="msg" data-g3="roles"></span></div>'+
     '</div>'+
     '<p class="note" style="margin-top:8px;">뼈대가 있는 모델(Meshy 리깅 등)은 설명·가리키기·손 흔들기 같은 몸짓을 하고, 모델 안의 대기·걷기 동작이 있으면 그것을 씁니다. '+
+      '입은 대본 모음(ㅏ·ㅔ·ㅣ·ㅗ·ㅜ)에 맞춰 움직입니다. 입 표정(블렌드셰이프)이 든 모델(VRM·VRoid, viseme·ARKit 이름)은 그 표정을 쓰고, 없으면 입을 그려 넣습니다. '+
       '스튜디오 장면의 3D 캐릭터도 이 파일을 씁니다. 씬마다 다른 캐릭터를 쓰려면 4단계 영상 편집에서 고르세요.</p>');
   bindCharMode(el,c);
   const q=k=>el.querySelector('[data-g3="'+k+'"]');
@@ -9996,7 +10190,8 @@ function renderGlbCharCard(d){
   glbStill(d).then(function(cv){const x=pv.getContext('2d');x.clearRect(0,0,pv.width,pv.height);
     const ro=_glbStill.roles,rm=q('roles');
     if(ro&&rm){const n=k=>ro[k]?ro[k].split(', ').length:0;rm.className='msg ok';
-      rm.textContent='쓰는 동작: 대기 '+n('idle')+' · 말하기 '+n('talk')+' · 걷기 '+n('walk')+(n('idle')+n('talk')+n('walk')?'':' (없음 — 자동 동작으로 움직임)');}
+      rm.textContent='쓰는 동작: 대기 '+n('idle')+' · 말하기 '+n('talk')+' · 걷기 '+n('walk')+(n('idle')+n('talk')+n('walk')?'':' (없음 — 자동 동작으로 움직임)')+
+        ' · 입모양: '+(_glbStill.lip?'모델 입 표정 '+_glbStill.lip.length+'개 (모음에 맞춤)':'입을 그려서 모음에 맞춤');}
     if(!cv){x.fillStyle='#888';x.font='13px sans-serif';x.textAlign='center';x.fillText(c.glb?'모델을 읽지 못했습니다':'모델 없음',pv.width/2,pv.height/2);return;}
     const k=Math.min(pv.width/cv.width,pv.height/cv.height),w=cv.width*k,h=cv.height*k;x.drawImage(cv,(pv.width-w)/2,pv.height-h,w,h);});
 }
@@ -10050,7 +10245,7 @@ function renderDesignCard(d){
       (d.kia3d==='glb'?'<div class="field"><label>3D 키아 모델 (TRELLIS·Hunyuan3D 등으로 만든 T자 자세 GLB)</label><div class="lorarow" style="margin:0;">'+
         '<button class="btn small" data-dz="glbPick">'+(d.char&&d.char.glb?'바꾸기':'올리기')+'</button>'+
         (d.char&&d.char.glb?'<span class="msg ok">'+esc(d.char.glb.name)+' · '+(d.char.glb.size/1048576).toFixed(1)+'MB</span>':'<span class="msg">모델 없음 — 2D 판으로 나감</span>')+
-        '<input type="file" hidden accept=".glb,model/gltf-binary" data-dz="glbFile"></div>'+
+        '<input type="file" hidden accept=".glb,.vrm,model/gltf-binary" data-dz="glbFile"></div>'+
         '<select data-dz="glbMode" style="margin-top:6px;">'+
           '<option value="asis"'+((d.char&&d.char.glbMode||'asis')==='asis'?' selected':'')+'>원본 그대로 — Meshy 등 전문 도구 모델 (자세용 뼈대만)</option>'+
           '<option value="fix"'+(d.char&&d.char.glbMode==='fix'?' selected':'')+'>자동 보정 — TRELLIS 등 AI 생성 모델 (색·얼굴·로고·꼬리 정리)</option></select>'+
@@ -11027,7 +11222,8 @@ function paintSpecialThumb(cv,s,d){
    자동 시험과 "자가 진단"이 내부 함수를 직접 확인할 수 있게 모아 둡니다 (동작에는 영향 없음). */
 try{window.__occ={courseDesign,loadThree,loadPost,Studio,ensurePptx,drawHtmlSlide,htmlOpts,HTML_LAYOUTS,LAYOUT_LABEL,chooseLayout,
   useHtmlFor:typeof useHtmlFor==='function'?useHtmlFor:null,keyedFrame,listPaging,timelineParts,meterParts,getWorkflows,allScenes,
-  specialTtsScenes,persist,DESIGN_PRESETS,drawHotspotOverlay,hotspotParts,SFX_LIB,sfxBuffer,composeBgm,bgmList,bgmEnvelope,wavBlob,iconSvg,courseMedia:()=>course.media,drawSlide:typeof drawSlide==='function'?drawSlide:null,titleHtml,buildGlbKia,classifySkeleton,makeFlat3D,makeRigMotion};}catch(e){}
+  specialTtsScenes,persist,DESIGN_PRESETS,drawHotspotOverlay,hotspotParts,SFX_LIB,sfxBuffer,composeBgm,bgmList,bgmEnvelope,wavBlob,iconSvg,courseMedia:()=>course.media,drawSlide:typeof drawSlide==='function'?drawSlide:null,titleHtml,buildGlbKia,classifySkeleton,makeFlat3D,makeRigMotion,
+  audioEnvelope,lipTrack,lipSyllables,lipSegs,lipPose,mouthKey,mouthXY,drawRig,glbLipMorphs,vrmSkeleton,glbFindMouth};}catch(e){}
 
 /* ══════════ 자가 진단 ══════════
    Node 없이 도구 안에서 바로 점검: 내장 자원 · 배치 등록 · HTML5 그리기 · 3D · PPT · 워크플로우 · ComfyUI/LM Studio 연결 */
