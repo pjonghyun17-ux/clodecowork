@@ -9319,7 +9319,9 @@ async function renderFileVideo(file,cb){
   venc.close();aenc.close();
   const blob=new Blob([muxer.target.buffer],{type:'video/mp4'});
   return {blob:blob,srt:buildSrt(tl),total:total,warnings:warnings,W:W,H:H,fps:fps,stems:stems,
-    segs:tl.segs.map(sg=>({start:sg.start,dur:sg.dur,kind:sg.kind,title:sg.kind==='chapter'?((sg.part&&sg.part.chap)+'장 '+((sg.part&&sg.part.u.title)||'')):(sg.scene&&(sg.scene.title||SPECIAL_TITLE[sg.scene.kind]||sg.scene.kind))||''}))};
+    segs:tl.segs.map(sg=>({start:sg.start,dur:sg.dur,kind:sg.kind,title:sg.kind==='chapter'?((sg.part&&sg.part.chap)+'장 '+((sg.part&&sg.part.u.title)||'')):(sg.scene&&(sg.scene.title||SPECIAL_TITLE[sg.scene.kind]||sg.scene.kind))||'',
+      sk:sg.scene?sg.scene.kind:null,qid:sg.scene&&sg.scene.qid||null,ask:sg.audioStart!=null?sg.audioStart+sg.audioDur:null,
+      chap:sg.part&&sg.part.chap||null,ptitle:sg.part&&sg.part.u&&sg.part.u.title||''}))};
 }
 /* 예전 호출 호환: 장 하나 */
 async function renderUnitVideo(ui,cb){
@@ -9364,6 +9366,219 @@ async function zipStore(files){
   return new Blob(parts.concat(cen,[e.buffer]),{type:'application/zip'});
 }
 function xesc(t){return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+/* ══════════ LMS 학습 패키지 (SCORM 1.2) ══════════
+   장 영상 + 자막(VTT) + 웹 플레이어(index.html) + imsmanifest.xml 을 ZIP 하나로.
+   플레이어: 진도(본 구간)·이어 보기·평가 문제에서 멈추고 풀기·점수를 LMS에 보고 (cmi.core.*).
+   LMS 없이 index.html 을 열어도 재생되고 진도는 그 PC 브라우저에 남습니다. */
+function scormCfg(){return Object.assign({thr:90,mastery:60,lock:true,subs:true},course.scorm||{});}
+/* 같은 내용으로 이미 렌더했는지 가늠 (장면·디자인·자료 정보) */
+function fileSig(fl){try{return cyrb53(JSON.stringify([fl.parts.map(p=>p.u),course.design,partsCfg(),course.media]));}catch(e){return String(Math.random());}}
+function srtToVtt(srt){return 'WEBVTT\n\n'+String(srt||'').replace(/\r/g,'').replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g,'$1.$2');}
+function scormQ(q,no){return {id:q.id,no:no,type:q.type==='ox'?'ox':'mc',question:String(q.question||''),choices:(q.choices||[]).map(String),
+  answer:q.type==='ox'?(q.answer==='X'?'X':'O'):(parseInt(q.answer,10)||1),explain:String(q.explain||'')};}
+function scormFileData(r,fl,i,subs){
+  const P=project.parts,qs=P.quiz||[],nm=String(i+1).padStart(2,'0');
+  const ch=[];let lastChap=null,qSeen=false;
+  (r.segs||[]).forEach(sg=>{
+    if(sg.kind==='chapter'){ch.push({t:sg.start,title:sg.title});lastChap=sg.chap;return;}
+    if(sg.chap&&sg.chap!==lastChap){ch.push({t:sg.start,title:sg.chap+'장 '+(sg.ptitle||'')});lastChap=sg.chap;return;}
+    if(!sg.chap&&sg.sk==='intro'&&!ch.length)ch.push({t:sg.start,title:'도입'});
+    if(sg.sk==='quizQ'&&!qSeen){qSeen=true;ch.push({t:sg.start,title:'평가'});}
+    if(sg.sk==='summary')ch.push({t:sg.start,title:'학습정리'});
+  });
+  const quiz=[];
+  (r.segs||[]).forEach((sg,k)=>{
+    if(sg.sk!=='quizQ'||!sg.qid)return;
+    const qi=qs.findIndex(q=>q.id===sg.qid);if(qi<0)return;
+    const ans=(r.segs||[]).slice(k+1).find(x=>x.sk==='quizA'&&x.qid===sg.qid);
+    const at=Math.max(sg.start+0.2,(sg.ask||sg.start+sg.dur)-0.1);
+    quiz.push(Object.assign(scormQ(qs[qi],qi+1),{at:+at.toFixed(2),resume:+((ans?ans.start:sg.start+sg.dur)).toFixed(2)}));
+  });
+  return {src:'media/'+nm+'.mp4',vtt:subs&&r.srt?'media/'+nm+'.vtt':null,title:fl.title||fl.label,label:fl.label,dur:+(r.total||0).toFixed(2),chapters:ch,quiz:quiz};
+}
+function scormManifest(o){
+  const id='OCCP_'+String(o.id).replace(/[^A-Za-z0-9_]/g,'_');
+  return '<?xml version="1.0" encoding="UTF-8"?>\n'+
+    '<manifest identifier="'+id+'" version="1.0" xmlns="http://www.imsproject.org/xsd/imscp_rootv1p1p2" xmlns:adlcp="http://www.adlnet.org/xsd/adlcp_rootv1p2" '+
+    'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.imsproject.org/xsd/imscp_rootv1p1p2 imscp_rootv1p1p2.xsd http://www.imsglobal.org/xsd/imsmd_rootv1p2p1 imsmd_rootv1p2p1.xsd http://www.adlnet.org/xsd/adlcp_rootv1p2 adlcp_rootv1p2.xsd">\n'+
+    ' <metadata><schema>ADL SCORM</schema><schemaversion>1.2</schemaversion></metadata>\n'+
+    ' <organizations default="ORG1"><organization identifier="ORG1"><title>'+xesc(o.course)+'</title>\n'+
+    '  <item identifier="ITEM1" identifierref="RES1" isvisible="true"><title>'+xesc(o.lesson)+'</title>'+(o.quiz?'<adlcp:masteryscore>'+o.mastery+'</adlcp:masteryscore>':'')+'</item>\n'+
+    ' </organization></organizations>\n'+
+    ' <resources><resource identifier="RES1" type="webcontent" adlcp:scormtype="sco" href="index.html">\n'+
+    o.files.map(f=>'  <file href="'+xesc(f)+'"/>').join('\n')+'\n </resource></resources>\n</manifest>\n';
+}
+const SCORM_CSS=String.raw`:root{--bg:#0f1420;--panel:#171e2e;--line:#29334b;--text:#eef2f8;--sub:#9aa6bd;--acc:#4fc3f7;--ok:#3fb67a;--bad:#e2574c}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);font-family:"Noto Sans KR","Malgun Gothic","Apple SD Gothic Neo",sans-serif}
+header{display:flex;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+header .t{font-weight:700;font-size:16px}header .c{color:var(--sub);font-size:13px;margin-top:2px}
+.prog{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:var(--sub);flex-wrap:wrap}
+.bar{width:160px;height:8px;border-radius:4px;background:var(--line);overflow:hidden}.bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .4s}
+main{display:flex;gap:16px;padding:16px;align-items:flex-start;flex-wrap:wrap}
+.stage{flex:1 1 640px;min-width:0;position:relative}
+video{width:100%;display:block;border-radius:10px;background:#000;aspect-ratio:16/9}
+aside{flex:0 1 300px;min-width:240px;background:var(--panel);border-radius:10px;padding:12px}
+aside h3{margin:10px 0 6px;font-size:13px;color:var(--sub);font-weight:600}
+.tabs{display:flex;flex-direction:column;gap:6px}
+.tab,.ch{display:flex;gap:8px;align-items:center;width:100%;text-align:left;background:none;border:1px solid transparent;color:var(--text);padding:7px 9px;border-radius:7px;font:inherit;font-size:13px;cursor:pointer}
+.tab{border-color:var(--line)}.tab.cur,.ch.cur{background:rgba(255,255,255,.07);font-weight:700}.tab .p{margin-left:auto;color:var(--sub);font-size:12px}
+.ch:hover,.tab:hover{background:rgba(255,255,255,.05)}.ch:disabled{opacity:.4;cursor:not-allowed}.ch .tm{color:var(--sub);font-variant-numeric:tabular-nums;min-width:40px}
+.nt{margin-top:12px;font-size:12.5px;color:var(--sub);line-height:1.55}
+.toast{position:absolute;left:12px;top:12px;background:rgba(15,20,32,.92);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13px;display:none;gap:8px;align-items:center}
+.toast.on{display:flex}.toast button{background:none;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:3px 8px;font:inherit;font-size:12px;cursor:pointer}
+.ov{position:absolute;inset:0;background:rgba(8,12,20,.88);display:none;align-items:center;justify-content:center;border-radius:10px;padding:3%;overflow:auto}
+.ov.on{display:flex}
+.qbox{background:var(--panel);border-radius:14px;padding:22px;max-width:760px;width:100%;margin:auto}
+.qn{color:var(--acc);font-weight:700;font-size:13px;margin-bottom:6px}
+.qq{font-size:20px;font-weight:700;line-height:1.5;margin-bottom:14px;white-space:pre-line}
+.opts{display:grid;gap:8px}.opts.ox{grid-template-columns:1fr 1fr}
+.opt{text-align:left;padding:12px 14px;border-radius:10px;border:1.5px solid #33405c;background:#1d2538;color:var(--text);font:inherit;font-size:16px;line-height:1.45;cursor:pointer;white-space:pre-line}
+.opts.ox .opt{text-align:center;font-size:34px;font-weight:800;padding:18px}
+.opt:hover{border-color:var(--acc)}.opt:disabled{cursor:default}.opt.ok{border-color:var(--ok);background:rgba(63,182,122,.16)}.opt.no{border-color:var(--bad);background:rgba(226,87,76,.16)}
+.fb{margin-top:14px;padding:12px 14px;border-radius:10px;background:#1d2538;line-height:1.6;display:none;white-space:pre-line}.fb.on{display:block}.fb b{margin-right:6px}
+.btns{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.go{padding:10px 18px;border-radius:8px;border:0;background:var(--acc);color:#0b1320;font:inherit;font-weight:700;cursor:pointer}.go.ghost{background:none;color:var(--text);border:1px solid var(--line)}
+@media (max-width:720px){aside{flex-basis:100%}.qq{font-size:17px}.opt{font-size:15px}}`;
+const SCORM_JS=String.raw`(function(){
+var D=JSON.parse(document.getElementById('data').textContent),v=document.getElementById('v'),$=function(i){return document.getElementById(i);};
+document.documentElement.style.setProperty('--acc',D.accent||'#4fc3f7');
+function findAPI(w){var n=0;try{while(w&&!w.API&&w.parent&&w.parent!==w&&n<12){w=w.parent;n++;}return (w&&w.API)||null;}catch(e){return null;}}
+var API=findAPI(window);if(!API&&window.opener){try{API=findAPI(window.opener);}catch(e){}}
+if(API){try{if(String(API.LMSInitialize(''))==='false')API=null;}catch(e){API=null;}}
+function g(k){try{return API?String(API.LMSGetValue(k)||''):'';}catch(e){return '';}}
+function s(k,x){try{if(API)API.LMSSetValue(k,String(x));}catch(e){}}
+function commit(){try{if(API)API.LMSCommit('');}catch(e){}}
+var F=D.files,W=F.map(function(f){return new Uint8Array(Math.max(1,Math.ceil(f.dur)));}),M=F.map(function(){return 0;}),A={},cur=0,lastT=0,resumeT=0,openQ=null,started=Date.now(),LS='occp-scorm-'+D.id,dirty=0,finished=false;
+function rd(){if(API)return g('cmi.suspend_data');try{return localStorage.getItem(LS)||'';}catch(e){return '';}}
+(function load(){var raw=rd(),o=null;if(!raw)return;try{o=JSON.parse(raw);}catch(e){return;}
+  (o.w||[]).forEach(function(r,i){if(!W[i]||!r)return;String(r).split(',').forEach(function(x){var q=x.split('-'),a=+q[0],b=+(q[1]||q[0]);for(var k=a;k<=b&&k<W[i].length;k++)W[i][k]=1;});});
+  (o.m||[]).forEach(function(x,i){if(i<M.length)M[i]=+x||0;});A=o.a||{};if(o.f!=null&&o.f<F.length){cur=+o.f;resumeT=+o.t||0;if(resumeT>F[cur].dur-3)resumeT=0;}})();
+function ranges(u){var out=[],a=-1;for(var i=0;i<=u.length;i++){if(i<u.length&&u[i]){if(a<0)a=i;}else if(a>=0){out.push(a===i-1?String(a):a+'-'+(i-1));a=-1;}}return out.join(',');}
+function pct(){var t=0,w=0;W.forEach(function(u){t+=u.length;for(var i=0;i<u.length;i++)w+=u[i];});return t?w/t:0;}
+function fpct(i){var u=W[i],w=0;for(var k=0;k<u.length;k++)w+=u[k];return u.length?w/u.length:0;}
+function allQ(){var L=[];F.forEach(function(f){(f.quiz||[]).forEach(function(q){L.push(q);});});(D.endQuiz||[]).forEach(function(q){L.push(q);});return L;}
+function score(){var L=allQ();if(!L.length)return null;var ok=0,n=0;L.forEach(function(q){var a=A[q.id];if(a){n++;if(a.c)ok++;}});return {ok:ok,n:n,all:L.length,raw:Math.round(100*ok/L.length)};}
+var reported='';
+function status(){var p=pct(),sc=score(),st;
+  if(sc){st=(sc.n>=sc.all&&p*100>=D.thr)?(sc.raw>=D.mastery?'passed':'failed'):'incomplete';
+    if(API&&sc.n){s('cmi.core.score.raw',sc.raw);s('cmi.core.score.min',0);s('cmi.core.score.max',100);}}
+  else st=p*100>=D.thr?'completed':'incomplete';
+  if(API&&st!==reported){s('cmi.core.lesson_status',st);reported=st;}
+  return st;}
+function save(){var o={v:1,f:cur,t:Math.floor(v.currentTime||0),w:W.map(ranges),m:M.map(function(x){return Math.floor(x);}),a:A},raw=JSON.stringify(o);
+  if(API){if(raw.length>4000){o.w=W.map(function(u,i){return fpct(i)>0.98?'0-'+(u.length-1):ranges(u);});raw=JSON.stringify(o).slice(0,4096);}
+    s('cmi.suspend_data',raw);s('cmi.core.lesson_location',cur+','+Math.floor(v.currentTime||0));status();commit();}
+  else{try{localStorage.setItem(LS,raw);}catch(e){}}
+  dirty=0;}
+function mmss(t){t=Math.max(0,Math.floor(t));return Math.floor(t/60)+':'+String(t%60).padStart(2,'0');}
+var LAB={passed:'합격',failed:'불합격',completed:'수료 기준 충족',incomplete:'학습 중'};
+function ui(){var p=pct(),sc=score(),st=status();$('pt').textContent='진도 '+Math.floor(p*100)+'%';$('pb').style.width=Math.min(100,p*100)+'%';
+  $('sc').textContent=(sc&&sc.n?'점수 '+sc.raw+'점 ('+sc.ok+'/'+sc.all+') · ':'')+LAB[st];
+  Array.prototype.forEach.call(document.querySelectorAll('.tab'),function(b,i){b.classList.toggle('cur',i===cur);b.querySelector('.p').textContent=Math.floor(fpct(i)*100)+'%';});
+  Array.prototype.forEach.call(document.querySelectorAll('.ch'),function(b){var t=+b.dataset.t;b.disabled=D.lock&&t>M[cur]+1.5&&fpct(cur)<0.98;
+    b.classList.toggle('cur',t<=v.currentTime+0.3&&(!b.nextElementSibling||+b.nextElementSibling.dataset.t>v.currentTime+0.3));});}
+function tabs(){var el=$('tabs');el.innerHTML='';if(F.length<2){el.style.display='none';return;}
+  F.forEach(function(f,i){var b=document.createElement('button');b.className='tab';b.innerHTML='<span></span><span class="p"></span>';b.firstChild.textContent=f.label+(f.title&&f.title!==f.label?' · '+f.title:'');
+    b.onclick=function(){if(i!==cur){save();setFile(i,0,true);}};el.appendChild(b);});}
+function chapters(){var el=$('chs');el.innerHTML='';var L=(F[cur].chapters||[]);if(!L.length)L=[{t:0,title:'처음'}];
+  L.forEach(function(c){var b=document.createElement('button');b.className='ch';b.dataset.t=c.t;b.innerHTML='<span class="tm"></span><span></span>';b.firstChild.textContent=mmss(c.t);b.lastChild.textContent=c.title;
+    b.onclick=function(){if(b.disabled)return;v.currentTime=c.t;v.play();};el.appendChild(b);});}
+function setFile(i,t,play){cur=i;lastT=t||0;var f=F[i];v.innerHTML='';v.src=f.src;
+  if(f.vtt){var tr=document.createElement('track');tr.kind='subtitles';tr.srclang='ko';tr.label='한국어';tr.src=f.vtt;tr.default=true;v.appendChild(tr);}
+  v.addEventListener('loadedmetadata',function h(){v.removeEventListener('loadedmetadata',h);if(t)v.currentTime=t;if(play)v.play().catch(function(){});},{once:true});
+  chapters();ui();}
+v.addEventListener('timeupdate',function(){var t=v.currentTime,prev=lastT,u=W[cur];
+  if(!v.paused&&!v.seeking&&t>=prev&&t-prev<1.6){for(var k=Math.floor(prev);k<=Math.floor(t)&&k<u.length;k++)u[k]=1;if(t>M[cur])M[cur]=t;dirty++;}
+  lastT=t;
+  if(!openQ)(F[cur].quiz||[]).some(function(q){if(!A[q.id]&&prev<q.at+0.05&&t>=q.at-0.05&&t<q.at+3){v.pause();ask(q,false);return true;}return false;});
+  if(dirty>40)save();ui();});
+v.addEventListener('seeking',function(){if(D.lock&&v.currentTime>M[cur]+1.5&&fpct(cur)<0.98){var b=M[cur];setTimeout(function(){v.currentTime=b;},0);note('처음 볼 때는 앞으로 건너뛸 수 없습니다');}lastT=v.currentTime;});
+v.addEventListener('pause',function(){save();});
+v.addEventListener('play',function(){if(openQ&&!A[openQ.id])v.pause();});
+v.addEventListener('ended',function(){var u=W[cur];for(var k=Math.floor(Math.max(0,v.duration-1.5));k<u.length;k++)u[k]=1;M[cur]=Math.max(M[cur],v.duration||0);save();
+  if(cur<F.length-1){setFile(cur+1,0,true);return;}finish();});
+function note(m){var el=$('nt2');el.textContent=m;clearTimeout(note.t);note.t=setTimeout(function(){el.textContent='';},3500);}
+var B2=['①','②','③','④','⑤','⑥'];
+function ask(q,endMode,then){openQ=q;var ov=$('ov'),opts=$('qo');ov.classList.add('on');$('qn').textContent='평가 문제 '+(q.no||'');$('qq').textContent=q.question;$('fb').className='fb';$('fb').textContent='';
+  opts.innerHTML='';opts.className='opts'+(q.type==='ox'?' ox':'');
+  var C=q.type==='ox'?['O','X']:q.choices;
+  C.forEach(function(c,i){var b=document.createElement('button');b.className='opt';b.textContent=q.type==='ox'?(c==='O'?'○':'✕'):(B2[i]||(i+1)+'.')+' '+c;
+    b.onclick=function(){if(b.disabled)return;var x=q.type==='ox'?c:i+1,ok=String(x)===String(q.answer);A[q.id]={x:x,c:ok};
+      Array.prototype.forEach.call(opts.children,function(o,j){o.disabled=true;var xx=q.type==='ox'?C[j]:j+1;if(String(xx)===String(q.answer))o.classList.add('ok');else if(j===i)o.classList.add('no');});
+      var ans=q.type==='ox'?(q.answer==='O'?'○ (맞음)':'✕ (틀림)'):(B2[q.answer-1]||q.answer)+' '+(q.choices[q.answer-1]||'');
+      var fb=$('fb');fb.className='fb on';fb.innerHTML='';var h=document.createElement('b');h.textContent=ok?'정답입니다! ':'아쉽습니다. ';h.style.color=ok?'var(--ok)':'var(--bad)';fb.appendChild(h);
+      fb.appendChild(document.createTextNode((ok?'':'정답은 '+ans+' 입니다.')+(q.explain?'\n'+q.explain:'')));
+      $('go').style.display='';save();ui();};
+    opts.appendChild(b);});
+  $('go').style.display='none';$('go').textContent=endMode?'다음':'계속 보기';
+  $('go').onclick=function(){ov.classList.remove('on');openQ=null;if(endMode){if(then)then();return;}
+    var u=W[cur];for(var k=Math.floor(q.at);k<=Math.floor(q.resume)&&k<u.length;k++)u[k]=1;if(q.resume>M[cur])M[cur]=q.resume;   // 문제를 푸는 동안 건너뛴 생각 시간은 본 것으로
+    v.currentTime=q.resume;lastT=q.resume;v.play().catch(function(){});};}
+function finish(){var rest=allQ().filter(function(q){return !A[q.id];});
+  if(rest.length){var i=0;(function next(){if(i>=rest.length){done();return;}ask(rest[i++],true,next);})();return;}done();}
+function done(){finished=true;save();var sc=score(),st=status(),ov=$('ov');ov.classList.add('on');$('qn').textContent='학습 결과';
+  $('qq').textContent='진도 '+Math.floor(pct()*100)+'%'+(sc?' · 점수 '+sc.raw+'점 ('+sc.ok+'/'+sc.all+')':'')+'\n'+LAB[st]+(st==='failed'?' — 합격 점수 '+D.mastery+'점':'')+(st==='incomplete'&&pct()*100<D.thr?' — 수료 기준 진도 '+D.thr+'%':'');
+  var o=$('qo');o.innerHTML='';o.className='opts';$('fb').className='fb';
+  var b1=document.createElement('button');b1.className='go';b1.textContent='처음부터 다시 보기';b1.onclick=function(){ov.classList.remove('on');setFile(0,0,true);};
+  var row=document.createElement('div');row.className='btns';row.appendChild(b1);
+  if(sc&&st==='failed'){var b2=document.createElement('button');b2.className='go ghost';b2.textContent='평가 다시 풀기';b2.onclick=function(){allQ().forEach(function(q){delete A[q.id];});save();finish();};row.appendChild(b2);}
+  o.appendChild(row);$('go').style.display='none';}
+function bye(){if(bye.d)return;bye.d=1;save();if(API){var ms=Date.now()-started,h=Math.floor(ms/3600000),m=Math.floor(ms/60000)%60,sec=(ms%60000)/1000;
+  s('cmi.core.session_time',String(h).padStart(4,'0')+':'+String(m).padStart(2,'0')+':'+sec.toFixed(2).padStart(5,'0'));s('cmi.core.exit',status()==='incomplete'?'suspend':'');commit();try{API.LMSFinish('');}catch(e){}}}
+window.addEventListener('pagehide',bye);window.addEventListener('beforeunload',bye);
+setInterval(function(){if(dirty)save();},20000);
+$('tt').textContent=D.lesson;$('ct').textContent=D.course;document.title=D.lesson;
+if(API&&g('cmi.core.lesson_status')==='not attempted')s('cmi.core.lesson_status','incomplete');
+$('nt').textContent='수료 기준: 진도 '+D.thr+'% 이상'+(allQ().length?' · 평가 '+allQ().length+'문항, '+D.mastery+'점 이상':'')+(D.lock?' · 처음 볼 때는 앞으로 건너뛸 수 없습니다':'')+(API?'':' · (LMS 없이 실행 중 — 진도는 이 브라우저에 저장)');
+tabs();setFile(cur,resumeT>5?resumeT:0,false);
+if(resumeT>5){var tw=$('toast');tw.classList.add('on');$('tmsg').textContent='지난번 본 곳('+mmss(resumeT)+')부터 이어 봅니다';$('tfirst').onclick=function(){v.currentTime=0;tw.classList.remove('on');};setTimeout(function(){tw.classList.remove('on');},8000);}
+window.__occScorm={state:function(){return {cur:cur,pct:pct(),score:score(),status:status(),answers:A,max:M.slice()};},api:!!API};
+})();`;
+function scormPlayerHtml(D){
+  const json=JSON.stringify(D).replace(/</g,'\\u003c');
+  const SC='<'+'/script>';
+  return '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+xesc(D.lesson)+'</title><style>'+SCORM_CSS+'</style></head><body>'+
+    '<header><div><div class="t" id="tt"></div><div class="c" id="ct"></div></div><div class="prog"><span id="pt">진도 0%</span><span class="bar"><i id="pb"></i></span><span id="sc"></span></div></header>'+
+    '<main><div class="stage"><video id="v" controls playsinline preload="metadata"></video>'+
+    '<div class="toast" id="toast"><span id="tmsg"></span><button id="tfirst">처음부터</button></div>'+
+    '<div class="ov" id="ov"><div class="qbox"><div class="qn" id="qn"></div><div class="qq" id="qq"></div><div class="opts" id="qo"></div><div class="fb" id="fb"></div><div class="btns"><button class="go" id="go">계속 보기</button></div></div></div></div>'+
+    '<aside><div class="tabs" id="tabs"></div><h3>차례</h3><div id="chs"></div><div class="nt" id="nt"></div><div class="nt" id="nt2"></div></aside></main>'+
+    '<script id="data" type="application/json">'+json+SC+'<script>'+SCORM_JS+SC+'</body></html>';
+}
+async function exportScorm(ui){
+  const d=courseDesign(),files=lessonFiles(),S=scormCfg(),L=project.lesson;
+  if(!files.length)throw new Error('묶을 영상이 없습니다');
+  await ensureFonts(d);
+  const media=[],fd=[];
+  for(let i=0;i<files.length;i++){
+    if(ui.isCancelled())throw new Error('중단됨');
+    const fl=files[i],sig=fileSig(fl),old=renderResults[fl.key];
+    let r=old&&old.blob&&old.segs&&old.sig===sig?old:null;
+    if(!r){
+      const ro={isCancelled:ui.isCancelled,onStatus:t=>ui.onStatus(fl.label+' · '+t),
+        onProgress:(f,n,fps,left)=>ui.onProgress((i+f/n)/files.length,fl.label+' 렌더 · '+f+'/'+n+' 프레임 · 남은 '+fmtDur(left))};
+      let x;
+      try{x=await renderFileVideo(fl,ro);}
+      catch(e){if(e.code==='AUDIO_MISSING'&&confirm(fl.label+'\n\n'+e.message+'\n\n무음으로 계속 렌더할까요?'))x=await renderFileVideo(fl,Object.assign({},ro,{allowSilent:true}));else throw e;}
+      if(old&&old.url)URL.revokeObjectURL(old.url);
+      r=renderResults[fl.key]={url:URL.createObjectURL(x.blob),name:fl.base+'.mp4',size:x.blob.size,total:x.total,blob:x.blob,segs:x.segs,srt:x.srt,sig:sig};
+    }else ui.onStatus(fl.label+' · 이미 렌더한 영상을 씀');
+    const f=scormFileData(r,fl,i,S.subs);fd.push(f);
+    media.push({name:f.src,blob:r.blob});
+    if(f.vtt)media.push({name:f.vtt,blob:new Blob([srtToVtt(r.srt)],{type:'text/vtt'})});
+  }
+  const used=new Set();fd.forEach(f=>f.quiz.forEach(q=>used.add(q.id)));
+  const P=project.parts,endQuiz=(P.quiz||[]).map((q,i)=>[q,i]).filter(([q])=>q.question&&!used.has(q.id)).map(([q,i])=>scormQ(q,i+1));
+  const lessonTitle=(L.no?L.no+'차시 ':'')+(L.title||'');
+  const data={id:course.id+'_'+project.id,course:course.name||'',lesson:lessonTitle,accent:d.accent||'#4fc3f7',thr:S.thr,mastery:S.mastery,lock:!!S.lock,files:fd,endQuiz:endQuiz};
+  const html=scormPlayerHtml(data),nq=fd.reduce((a,f)=>a+f.quiz.length,0)+endQuiz.length;
+  const all=[{name:'index.html',blob:new Blob([html],{type:'text/html'})}].concat(media);
+  const man=scormManifest({id:data.id,course:data.course,lesson:lessonTitle,quiz:nq>0,mastery:S.mastery,files:all.map(x=>x.name)});
+  ui.onStatus('ZIP 묶는 중…');
+  const zip=await zipStore([{name:'imsmanifest.xml',blob:new Blob([man],{type:'application/xml'})}].concat(all));
+  return {zip:zip,name:fileBase('SCORM')+'.zip',files:fd.length,quiz:nq,html:html,data:data,media:media};
+}
 /* FCP7 XML (xmeml v5): 씬 경계마다 잘린 클립 · 장/씬 마커 */
 function premiereXml(o){
   const fps=o.fps,F=t=>Math.round(t*fps),total=F(o.total),rate='<rate><timebase>'+fps+'</timebase><ntsc>FALSE</ntsc></rate>';
@@ -9472,8 +9687,9 @@ async function queueRun(ui){
             else throw e;
           }
           if(ui.isCancelled()&&!r)break;
-          downloadBlob(r.blob,fl.base+'.mp4');downloadFile(r.srt,fl.base+'.srt','text/plain');
           if(renderResults[fl.key])URL.revokeObjectURL(renderResults[fl.key].url);
+          const qurl=downloadBlob(r.blob,fl.base+'.mp4');downloadFile(r.srt,fl.base+'.srt','text/plain');
+          if(it.id===project.id)renderResults[fl.key]={url:qurl,name:fl.base+'.mp4',size:r.blob.size,total:r.total,blob:r.blob,segs:r.segs,srt:r.srt,sig:fileSig(fl)};
           r.warnings.forEach(w=>warns.push(it.label+' '+w));
           it.done.push(fl.key);files++;queueSave(q);                          // 파일마다 저장
         }
@@ -10592,7 +10808,7 @@ function renderRenderStage(){
         if(renderResults[fl.key])URL.revokeObjectURL(renderResults[fl.key].url);
         const url=downloadBlob(r.blob,fl.base+'.mp4');
         downloadFile(r.srt,fl.base+'.srt','text/plain');
-        renderResults[fl.key]={url:url,name:fl.base+'.mp4',size:r.blob.size,total:r.total};
+        renderResults[fl.key]={url:url,name:fl.base+'.mp4',size:r.blob.size,total:r.total,blob:r.blob,segs:r.segs,srt:r.srt,sig:fileSig(fl)};
         r.warnings.forEach(w=>warns.push(w));
         ok++;
       }
@@ -10654,6 +10870,36 @@ function renderRenderStage(){
     finally{setBusy(false);stop.style.display='none';}
   }
   document.getElementById('premAll').addEventListener('click',()=>runPremiere(files.map((_,i)=>i)));
+  // LMS 학습 패키지 (SCORM 1.2)
+  const scb=document.createElement('div');scb.className='card open';const SC=scormCfg(),nq=(project.parts.quiz||[]).filter(q=>q.question).length;
+  scb.innerHTML='<div class="card-head" style="cursor:default;"><h3>LMS 학습 패키지 (SCORM 1.2)</h3><span class="sub">영상 + 자막 + 진도·평가 플레이어 → ZIP</span></div><div class="card-body">'+
+    '<div class="form-grid">'+
+      '<div class="field"><label>수료 기준 진도</label><select id="scThr">'+[80,90,95,100].map(v=>'<option value="'+v+'"'+(SC.thr===v?' selected':'')+'>'+v+'% 이상 시청</option>').join('')+'</select></div>'+
+      '<div class="field"><label>합격 점수 (평가 '+nq+'문항)</label><select id="scMas"'+(nq?'':' disabled')+'>'+[50,60,70,80,100].map(v=>'<option value="'+v+'"'+(SC.mastery===v?' selected':'')+'>'+v+'점 이상</option>').join('')+'</select></div>'+
+      '<div class="field"><label>처음 볼 때 앞으로 건너뛰기</label><select id="scLock"><option value="1"'+(SC.lock?' selected':'')+'>막기 (본 곳까지만 이동)</option><option value="0"'+(SC.lock?'':' selected')+'>허용</option></select></div>'+
+      '<div class="field"><label>자막</label><select id="scSub"><option value="1"'+(SC.subs?' selected':'')+'>넣기 (켜고 끌 수 있음)</option><option value="0"'+(SC.subs?'':' selected')+'>넣지 않기</option></select></div>'+
+    '</div>'+
+    '<div class="row-actions" style="margin-top:8px;"><button class="btn small primary" id="scGo">SCORM 묶음 만들기</button><button class="btn small" id="scPv" title="만든 묶음의 플레이어를 새 창에서 열어 봅니다">플레이어 미리 보기</button></div>'+
+    '<p class="note" style="margin-top:6px;">영상 중간 평가 문제에서 멈춰 학습자가 직접 고르고, 정답·해설을 본 뒤 이어서 봅니다. 진도(본 구간)·이어 보기 위치·점수를 LMS에 보고합니다 (cmi.core.lesson_status · score · suspend_data). '+
+      '이번에 렌더한 영상이 있고 그 뒤로 바뀐 것이 없으면 다시 렌더하지 않습니다. LMS 없이 ZIP을 풀고 index.html 을 열어도 재생됩니다. 올리기 전에 납품처 LMS가 SCORM 1.2 를 받는지 확인하세요.</p></div>';
+  main.appendChild(scb);
+  const scSave=()=>{course.scorm={thr:+document.getElementById('scThr').value,mastery:+document.getElementById('scMas').value,lock:document.getElementById('scLock').value==='1',subs:document.getElementById('scSub').value==='1'};persist();};
+  ['scThr','scMas','scLock','scSub'].forEach(id=>document.getElementById(id).addEventListener('change',scSave));
+  let lastScorm=null;
+  document.getElementById('scGo').addEventListener('click',async function(){
+    setBusy(true);renderCancel=false;stop.style.display='';stop.textContent='중단';stop.disabled=false;prog.style.display='';
+    try{const r=await exportScorm({isCancelled:()=>renderCancel,onStatus:t=>{stat.textContent=t;},onProgress:(f,t)=>{bar.style.width=(f*100).toFixed(1)+'%';stat.textContent=t;}});
+      lastScorm=r;downloadBlob(r.zip,r.name);msg.className='msg ok';msg.textContent='SCORM 묶음을 저장했습니다 · 영상 '+r.files+'개 · 평가 '+r.quiz+'문항 · '+(r.zip.size/1048576).toFixed(1)+'MB';}
+    catch(e){msg.className='msg fail';msg.textContent=e.message;}
+    finally{setBusy(false);stop.style.display='none';}
+  });
+  document.getElementById('scPv').addEventListener('click',function(){
+    if(!lastScorm){msg.className='msg';msg.textContent='먼저 "SCORM 묶음 만들기"를 눌러 주세요';return;}
+    const map={};lastScorm.media.forEach(m=>{map[m.name]=URL.createObjectURL(m.blob);});
+    const D=JSON.parse(JSON.stringify(lastScorm.data));D.id+='_preview';D.files.forEach(f=>{f.src=map[f.src];if(f.vtt)f.vtt=map[f.vtt];});
+    const w=window.open(URL.createObjectURL(new Blob([scormPlayerHtml(D)],{type:'text/html'})),'_blank');
+    if(!w){msg.className='msg fail';msg.textContent='팝업이 막혔습니다 — 이 페이지의 팝업을 허용해 주세요';}
+  });
   box.querySelectorAll('tr[data-fi]').forEach(function(tr){
     const fi=+tr.dataset.fi;
     tr.querySelector('[data-a="one"]').addEventListener('click',()=>runFiles([fi]));
