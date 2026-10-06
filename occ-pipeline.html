@@ -35,6 +35,9 @@
   .hdrSel:focus{outline:2px solid var(--accent);outline-offset:1px;}
   .savestate{font-size:11.5px;color:var(--text-dim);font-family:'IBM Plex Mono',monospace;white-space:nowrap;}
   .savestate.bad{color:var(--danger);}
+  header .btn.warn{border-color:var(--danger);color:var(--danger);}
+  .sc-note{font-size:12.5px;color:var(--text-dim);line-height:1.55;}
+  header .btn:disabled{opacity:.35;cursor:default;}
   .stage.active.ov .stage-num{border-color:var(--accent);color:var(--accent);}
   table.ov{width:100%;border-collapse:collapse;font-size:12.5px;}
   table.ov th{text-align:left;font-weight:500;color:var(--text-dim);font-size:11.5px;padding:7px 8px;border-bottom:1px solid var(--border);white-space:nowrap;}
@@ -226,6 +229,9 @@
   <select id="lessonSel" class="hdrSel" title="차시"></select>
   <button class="btn" id="overviewBtn">과정 개요</button>
   <span id="saveState" class="savestate"></span>
+  <button class="btn small ghost" id="undoBtn" title="되돌리기 (Ctrl+Z)" disabled>↶</button>
+  <button class="btn small ghost" id="redoBtn" title="다시 하기 (Ctrl+Shift+Z)" disabled>↷</button>
+  <button class="btn" id="verBtn" title="자동 저장된 버전 · 폴더 자동 저장 · 저장 공간">버전 기록</button>
   <div style="flex:1"></div>
   <button class="btn" id="exportBtn" title="과정 전체(모든 차시·자료실)를 파일로 백업">과정 백업</button>
   <button class="btn" id="importBtn" title="과정 백업 또는 예전 차시 파일 불러오기">가져오기</button>
@@ -450,6 +456,18 @@ const Store=(function(){
     delBlob:function(id){
       if(mode==='ls')return Promise.resolve();
       return tx('assets',true,os=>os.delete(id));
+    },
+    blobKeys:function(){
+      if(mode==='ls')return Promise.resolve([]);
+      return tx('assets',false,os=>os.getAllKeys()).then(ks=>(ks||[]).filter(k=>typeof k==='string'&&!/^(snap:|snapbig:|kv:)/.test(k)));
+    },
+    /* 버전 사본·설정 값 (구조화 복제 그대로 — 폴더 손잡이도 담을 수 있음). 열쇠 접두어 snap: · snapbig: · kv: */
+    raw:{
+      get:function(k){return mode==='ls'?Promise.resolve(null):tx('assets',false,os=>os.get(k));},
+      put:function(k,v){return mode==='ls'?Promise.resolve():tx('assets',true,os=>os.put(v,k));},
+      del:function(k){return mode==='ls'?Promise.resolve():tx('assets',true,os=>os.delete(k));},
+      has:function(k){return mode==='ls'?Promise.resolve(false):tx('assets',false,os=>os.count(k)).then(n=>n>0);},
+      keys:function(pre){return mode==='ls'?Promise.resolve([]):tx('assets',false,os=>os.getAllKeys(IDBKeyRange.bound(pre,pre+'\uffff')));}
     }
   };
 })();
@@ -559,7 +577,8 @@ async function flushSave(){
     await Store.put('courses',course);
     const k=allCourses.findIndex(x=>x.id===course.id);
     if(k>=0)allCourses[k]=course;else allCourses.push(course);
-    setSaveState('저장됨');
+    setSaveState('저장됨'+(Folder.state==='on'&&Folder.last?' · 폴더 '+hhmm(Folder.last):''));
+    histCapture();snapMaybe();folderSchedule();
     if(typeof renderHeader==='function')renderHeader();
   }catch(e){setSaveState('저장 실패 — '+(e&&e.message||e),true);}
   finally{_saving=false;if(_saveAgain){_saveAgain=false;persist();}}
@@ -576,11 +595,412 @@ function setSaveState(t,bad){
   if(!el)return;
   el.textContent=t;el.className='savestate'+(bad?' bad':'');
 }
-document.addEventListener('visibilitychange',function(){if(document.hidden&&_saveTimer)flushSaveNow();});
+/* ══════════ 저장 안전장치: 되돌리기 · 버전 기록 · 폴더 자동 저장 ══════════
+   되돌리기: 저장할 때마다 상태를 메모리에 쌓아 Ctrl+Z / Ctrl+Shift+Z(또는 Ctrl+Y)로 오갑니다. 차시를 바꾸면 새로 시작.
+   버전 기록: 차시를 열 때·5분마다·되살리기/삭제/덮어쓰기 직전에 브라우저 저장소에 사본을 남깁니다.
+     이미지 data URL·긴 자료 같은 큰 글은 따로 한 번만 보관해 사본이 가볍습니다. 영상·음악 파일 자체는 사본에 담지 않습니다.
+   폴더 자동 저장: 고른 폴더에 과정 파일과 자료 파일(음성·영상·3D 모델)을 이어서 써 둡니다 (Chrome·Edge). */
+const SNAP_BIG=4096,HIST_MAX=80,SNAP_EVERY=5*60*1000,SNAP_AUTO_KEEP=30,SNAP_OTHER_KEEP=40;
+function cyrb53(str){
+  let h1=0xdeadbeef,h2=0x41c6ce57;
+  for(let i=0;i<str.length;i++){const ch=str.charCodeAt(i);h1=Math.imul(h1^ch,2654435761);h2=Math.imul(h2^ch,1597334677);}
+  h1=Math.imul(h1^(h1>>>16),2246822507)^Math.imul(h2^(h2>>>13),3266489909);
+  h2=Math.imul(h2^(h2>>>16),2246822507)^Math.imul(h1^(h1>>>13),3266489909);
+  return (h2>>>0).toString(36)+(h1>>>0).toString(36);
+}
+const _bigMemo=new Map();let _bigMemoLen=0;              // 같은 글을 매번 다시 세지 않도록
+function bigKey(s){
+  const ck=s.length+'|'+s.slice(0,40)+'|'+s.slice(-40);let a=_bigMemo.get(ck);
+  if(a){for(const e of a)if(e.s===s)return e.h;}
+  else{if(_bigMemoLen>48e6){_bigMemo.clear();_bigMemoLen=0;}a=[];_bigMemo.set(ck,a);}
+  const h='b'+s.length.toString(36)+'_'+cyrb53(s);a.push({s:s,h:h});_bigMemoLen+=s.length;if(a.length>4)a.shift();
+  return h;
+}
+function snapPack(obj){
+  const bigs=new Map();
+  const json=JSON.stringify(obj,function(k,v){if(typeof v==='string'&&v.length>SNAP_BIG){const h=bigKey(v);bigs.set(h,v);return '\u0001'+h;}return v;});
+  return {json:json,bigs:bigs};
+}
+function snapUnpack(json,bigs){
+  return JSON.parse(json,function(k,v){if(typeof v==='string'&&v.charCodeAt(0)===1){const b=bigs.get(v.slice(1));return b==null?null:b;}return v;});
+}
+/* 차시 + 과정 설정(차시 목록·시각 제외) */
+function snapState(rec,c){
+  rec=rec?Object.assign({},rec):lessonRecord(project);delete rec.updatedAt;
+  const cc=Object.assign({},c||course);delete cc.lessons;delete cc.updatedAt;
+  return {lesson:rec,course:cc};
+}
+/* 저장된 상태를 지금 차시에 되돌려 놓음 (withCourse: 디자인·캐릭터·자료실 같은 과정 설정까지) */
+function applyState(st,withCourse){
+  if(withCourse&&st.course){
+    Object.keys(course).forEach(k=>{if(k!=='id'&&k!=='lessons'&&k!=='updatedAt'&&!(k in st.course))delete course[k];});
+    Object.keys(st.course).forEach(k=>{if(k!=='id'&&k!=='lessons')course[k]=st.course[k];});
+    normalizeCourse(course);
+  }
+  project=bindLesson(course,Object.assign({},st.lesson,{id:project.id,courseId:course.id}));
+  rerenderKeepOpen();
+}
+/* 다시 그려도 펼쳐 둔 씬은 펼친 채로, 스크롤도 그대로 */
+function rerenderKeepOpen(){
+  const open=Array.prototype.map.call(document.querySelectorAll('#main .scene'),(e,i)=>e.classList.contains('open')?i:-1).filter(i=>i>=0);
+  const y=window.scrollY;renderRail();renderMain();
+  const sc=document.querySelectorAll('#main .scene');open.forEach(i=>{if(sc[i])sc[i].classList.add('open');});
+  window.scrollTo(0,y);
+}
+
+/* ── 되돌리기 (메모리) ── */
+const Hist={pid:null,list:[],i:-1,bigs:new Map(),replace:false};
+function histReset(){
+  if(!project||!course)return;
+  const p=snapPack(snapState());
+  Hist.pid=project.id;Hist.list=[{json:p.json,keys:[...p.bigs.keys()]}];Hist.i=0;Hist.bigs=p.bigs;
+  histUI();
+  _snapAt[project.id]=Date.now();snapQueue(()=>snapTake('open','차시를 열 때'));
+}
+// 화면을 그리며 채워지는 기본값까지 담기도록, 차시를 연 뒤 그리기가 끝난 다음에 출발점을 잡음
+function histEnsure(){if(project&&Hist.pid!==project.id){Hist.pid=project.id;Hist.list=[];Hist.i=-1;setTimeout(()=>{if(!Hist.list.length)histReset();},0);}}
+function histCapture(){
+  if(!project||!course)return;
+  if(Hist.pid!==project.id){histReset();return;}
+  const p=snapPack(snapState()),cur=Hist.list[Hist.i];
+  if(cur&&cur.json===p.json)return;
+  if(Hist.replace&&cur){                               // 되돌린 상태를 다시 그리며 채워진 기본값: 같은 칸으로
+    cur.json=p.json;cur.keys=[...p.bigs.keys()];p.bigs.forEach((v,k)=>Hist.bigs.set(k,v));return;}
+  Hist.list=Hist.list.slice(0,Hist.i+1);
+  Hist.list.push({json:p.json,keys:[...p.bigs.keys()]});
+  p.bigs.forEach((v,k)=>Hist.bigs.set(k,v));
+  if(Hist.list.length>HIST_MAX)Hist.list.shift();
+  Hist.i=Hist.list.length-1;
+  const live=new Set();Hist.list.forEach(e=>e.keys.forEach(k=>live.add(k)));
+  Hist.bigs.forEach((v,k)=>{if(!live.has(k))Hist.bigs.delete(k);});
+  histUI();
+}
+function overlayOpen(){return Array.prototype.some.call(document.body.children,e=>e.style&&e.style.position==='fixed'&&e.style.zIndex==='9999');}
+let _histBusy=false;
+async function histGo(d){
+  if(_histBusy||!project)return;
+  if(busy){setSaveState('작업 중에는 되돌릴 수 없습니다',true);return;}
+  if(overlayOpen())return;
+  _histBusy=true;
+  try{
+    await flushSaveNow();histEnsure();                 // 방금 고친 것까지 쌓은 뒤
+    const j=Hist.i+d;if(j<0||j>=Hist.list.length)return;
+    Hist.i=j;Hist.replace=true;
+    try{applyState(snapUnpack(Hist.list[j].json,Hist.bigs),true);await flushSaveNow();}finally{Hist.replace=false;}
+    setSaveState((d<0?'되돌림':'다시 함')+' · 저장됨');
+  }finally{_histBusy=false;histUI();}
+}
+function histUI(){
+  const u=document.getElementById('undoBtn'),r=document.getElementById('redoBtn');
+  if(u)u.disabled=!(Hist.i>0);if(r)r.disabled=!(Hist.i>=0&&Hist.i<Hist.list.length-1);
+}
+function isTextField(t){
+  if(!t||!t.closest)return false;
+  if(t.closest('textarea,[contenteditable=""],[contenteditable="true"]'))return true;
+  const i=t.closest('input');return !!i&&/^(text|search|url|email|password|number|tel|)$/.test(i.type||'');
+}
+document.addEventListener('keydown',function(e){
+  if(!(e.ctrlKey||e.metaKey)||e.altKey)return;
+  const k=(e.key||'').toLowerCase();if(k!=='z'&&k!=='y')return;
+  if(isTextField(e.target)||overlayOpen())return;     // 글 입력칸은 브라우저 자체 되돌리기
+  e.preventDefault();histGo(k==='y'||e.shiftKey?1:-1);
+});
+
+/* ── 버전 기록 (브라우저 저장소) ── */
+const SNAP_KIND={open:'열 때',auto:'자동',manual:'직접 저장',before:'바꾸기 전'};
+const _snapAt={};
+let _snapQ=Promise.resolve();
+function snapQueue(f){const p=_snapQ.then(f,f);_snapQ=p.catch(()=>{});return p;}
+async function snapIdx(lid){try{return (await Store.raw.get('kv:snapidx:'+lid))||[];}catch(e){return [];}}
+async function snapTake(kind,label,rec,c){
+  if(Store.mode()!=='idb'||(!rec&&!project))return null;
+  const st=snapState(rec,c),lid=st.lesson.id,p=snapPack(st),sig=cyrb53(p.json);
+  const idx=await snapIdx(lid);
+  if(kind!=='manual'&&idx.length&&idx[0].sig===sig)return null;     // 바뀐 게 없음
+  for(const [k,v] of p.bigs){if(!(await Store.raw.has('snapbig:'+k)))await Store.raw.put('snapbig:'+k,v);}
+  const id=uid('sn');await Store.raw.put('snap:'+id,p.json);
+  const sc=[];(st.lesson.units||[]).forEach(u=>(u.scenes||[]).forEach(s=>sc.push(s)));
+  const L=st.lesson.lesson||{};
+  idx.unshift({id:id,at:Date.now(),kind:kind,label:label||'',sig:sig,bigs:[...p.bigs.keys()],size:p.json.length,
+    lessonId:lid,courseId:st.course.id,courseName:st.course.name||'',no:L.no||'',title:L.title||'',
+    scenes:sc.length,chars:sc.reduce((a,s)=>a+String(s.narration||'').length,0),voiced:sc.filter(s=>s.audioOut).length});
+  const nA=[0],nO=[0],drop=[];
+  const keep=idx.filter(m=>{const a=m.kind==='auto'||m.kind==='open',n=a?nA:nO;n[0]++;if(n[0]>(a?SNAP_AUTO_KEEP:SNAP_OTHER_KEEP)){drop.push(m);return false;}return true;});
+  await Store.raw.put('kv:snapidx:'+lid,keep);
+  for(const m of drop)await Store.raw.del('snap:'+m.id);
+  if(drop.length)await snapGc();
+  return keep[0];
+}
+async function snapGc(){
+  const live=new Set();
+  for(const k of await Store.raw.keys('kv:snapidx:'))((await Store.raw.get(k))||[]).forEach(m=>(m.bigs||[]).forEach(b=>live.add(b)));
+  for(const k of await Store.raw.keys('snapbig:'))if(!live.has(k.slice(8)))await Store.raw.del(k);
+}
+async function snapLoad(m){
+  const json=await Store.raw.get('snap:'+m.id);if(!json)throw new Error('사본을 찾지 못했습니다');
+  const bigs=new Map();let miss=0;
+  for(const k of (m.bigs||[])){const v=await Store.raw.get('snapbig:'+k);if(v==null)miss++;else bigs.set(k,v);}
+  return {st:snapUnpack(json,bigs),miss:miss};
+}
+async function snapDelete(m){
+  const idx=(await snapIdx(m.lessonId)).filter(x=>x.id!==m.id);
+  await Store.raw.put('kv:snapidx:'+m.lessonId,idx);await Store.raw.del('snap:'+m.id);await snapGc();
+}
+function snapMaybe(){
+  if(!project)return;const lid=project.id,now=Date.now();
+  if(_snapAt[lid]&&now-_snapAt[lid]<SNAP_EVERY)return;
+  _snapAt[lid]=now;snapQueue(()=>snapTake('auto'));
+}
+/* 지금 차시에 되살리기 (되살리기 직전 상태도 사본으로 남김) */
+async function snapRestore(m,withCourse){
+  await flushSaveNow();
+  await snapQueue(()=>snapTake('before','되살리기 전'));
+  const r=await snapLoad(m);
+  applyState(r.st,withCourse);
+  await flushSaveNow();
+  return r.miss;
+}
+/* 지운 차시 되살리기: 과정까지 지워졌으면 사본의 과정 설정으로 다시 만듦 */
+async function snapRevive(m){
+  await flushSaveNow();
+  const st=(await snapLoad(m)).st;
+  let c=allCourses.find(x=>x.id===st.lesson.courseId);
+  if(!c){c=normalizeCourse(Object.assign({},st.course,{lessons:[]}));allCourses.push(c);await Store.put('courses',c);}
+  const rec=Object.assign({},st.lesson,{courseId:c.id});
+  if(await Store.get('lessons',rec.id))rec.id=uid('l');
+  await Store.put('lessons',rec);
+  course=c;project=bindLesson(course,rec);
+  await flushSaveNow();saveActive();
+}
+/* 과정이 쓰는 저장 파일(음성·영상·3D 모델·움직임 파일 …) 번호: 과정·차시 내용 안에 그 번호가 나오면 씀 */
+async function courseBlobIds(objs){
+  const keys=new Set(await Store.blobKeys()),out=new Set();
+  const walk=v=>{if(typeof v==='string'){if(keys.has(v))out.add(v);}else if(Array.isArray(v))v.forEach(walk);else if(v&&typeof v==='object')for(const k in v)walk(v[k]);};
+  objs.forEach(walk);return [...out];
+}
+
+/* ── 폴더 자동 저장 (File System Access) ── */
+const Folder={h:null,state:'off',last:0,err:'',timer:null,busy:false,again:false};
+function folderSupported(){return typeof window.showDirectoryPicker==='function';}
+async function folderBoot(){
+  if(!folderSupported()){Folder.state='unsupported';return;}
+  let h=null;try{h=await Store.raw.get('kv:fsdir');}catch(e){}
+  if(!h){Folder.state='off';return folderUI();}
+  Folder.h=h;
+  try{Folder.state=(await h.queryPermission({mode:'readwrite'}))==='granted'?'on':'need';}catch(e){Folder.state='need';}
+  Folder.last=(await Store.raw.get('kv:fslast').catch(()=>0))||0;
+  folderUI();
+}
+async function folderConnect(){
+  const h=await window.showDirectoryPicker({id:'occp-save',mode:'readwrite'});
+  Folder.h=h;await Store.raw.put('kv:fsdir',h);Folder.state='on';Folder.err='';
+  await folderSaveNow();
+}
+async function folderGrant(){
+  if(!Folder.h)return;
+  Folder.state=(await Folder.h.requestPermission({mode:'readwrite'}))==='granted'?'on':'need';
+  folderUI();if(Folder.state==='on')await folderSaveNow();
+}
+async function folderDisconnect(){Folder.h=null;Folder.state='off';await Store.raw.del('kv:fsdir');folderUI();}
+function folderSchedule(){
+  if(Folder.state!=='on'||Folder.timer)return;
+  Folder.timer=setTimeout(()=>{Folder.timer=null;folderSaveNow();},15000);   // 고치는 동안은 모아 두었다가 15초 뒤 한 번
+}
+async function fsWrite(dir,name,blob){const fh=await dir.getFileHandle(name,{create:true});const w=await fh.createWritable();await w.write(blob);await w.close();}
+function blobExt(b){const m={'audio/wav':'.wav','audio/x-wav':'.wav','audio/mpeg':'.mp3','audio/mp4':'.m4a','video/mp4':'.mp4','video/webm':'.webm','model/gltf-binary':'.glb',
+  'image/png':'.png','image/jpeg':'.jpg','image/webp':'.webp','application/json':'.json'};return m[(b.type||'').split(';')[0]]||'.bin';}
+function localDay(t){const d=new Date(t);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+async function courseFolder(c){
+  let name=await Store.raw.get('kv:fsname:'+c.id).catch(()=>null);
+  if(!name){name=(c.name||'과정').replace(/[\\/:*?"<>|]/g,'_').trim().slice(0,60)||'과정';await Store.raw.put('kv:fsname:'+c.id,name);}
+  return Folder.h.getDirectoryHandle(name,{create:true});
+}
+async function folderSaveNow(){
+  if(Folder.state!=='on'||!course)return;
+  if(Folder.busy){Folder.again=true;return;}
+  Folder.busy=true;folderUI();
+  try{
+    await flushSaveNow();
+    const ls=(await Store.all('lessons')).filter(l=>l.courseId===course.id).sort(byNo);
+    const dir=await courseFolder(course),ad=await dir.getDirectoryHandle('자료',{create:true}),assets=[];
+    for(const id of await courseBlobIds([course,ls])){
+      const b=await Store.getBlob(id).catch(()=>null);if(!b)continue;
+      const fn=id+blobExt(b);let same=false;
+      try{same=(await (await ad.getFileHandle(fn)).getFile()).size===b.size;}catch(e){}
+      if(!same)await fsWrite(ad,fn,b);                // 자료 파일은 바뀐 것만
+      assets.push({id:id,type:b.type||'',file:'자료/'+fn});
+    }
+    const blob=new Blob([JSON.stringify({kind:'occp-course',version:4,exportedAt:new Date().toISOString(),course:course,lessons:ls,assets:assets},null,1)],{type:'application/json'});
+    await fsWrite(dir,'과정.occp-course.json',blob);
+    const hd=await dir.getDirectoryHandle('날짜별',{create:true});
+    await fsWrite(hd,localDay(Date.now())+'.occp-course.json',blob);   // 그날 마지막 상태
+    const days=[];for await (const [n,e] of hd.entries())if(e.kind==='file'&&/^\d{4}-\d\d-\d\d\.occp-course\.json$/.test(n))days.push(n);
+    days.sort();for(const n of days.slice(0,Math.max(0,days.length-30)))await hd.removeEntry(n);
+    Folder.last=Date.now();Folder.err='';Store.raw.put('kv:fslast',Folder.last).catch(()=>{});
+  }catch(e){
+    Folder.err=(e&&e.message)||String(e);
+    if(e&&(e.name==='NotAllowedError'||e.name==='SecurityError'))Folder.state='need';
+  }finally{
+    Folder.busy=false;folderUI();
+    if(Folder.again){Folder.again=false;folderSchedule();}
+  }
+}
+/* 폴더의 과정 파일 목록 (고른 폴더가 과정 폴더이거나, 그 아래에 과정 폴더들) */
+async function folderFind(h){
+  const out=[];
+  async function probe(dir,label){
+    let fh=null;try{fh=await dir.getFileHandle('과정.occp-course.json');}catch(e){return;}
+    const vers=[{label:'최신',fh:fh}];
+    try{const hd=await dir.getDirectoryHandle('날짜별');const ns=[];
+      for await (const [n,e] of hd.entries())if(e.kind==='file'&&/\.occp-course\.json$/.test(n))ns.push([n,e]);
+      ns.sort((a,b)=>a[0]<b[0]?1:-1).forEach(x=>vers.push({label:x[0].replace('.occp-course.json',''),fh:x[1]}));}catch(e){}
+    out.push({dir:dir,label:label,vers:vers});
+  }
+  await probe(h,h.name);
+  if(!out.length)for await (const [n,e] of h.entries())if(e.kind==='directory')await probe(e,n);
+  return out;
+}
+async function folderLoad(dir,fh){
+  const d=JSON.parse(decodeKoreanText(await (await fh.getFile()).arrayBuffer()));
+  for(const a of (d.assets||[])){
+    if(a.data||!a.file)continue;
+    try{let cur=dir;const parts=a.file.split('/');for(const x of parts.slice(0,-1))cur=await cur.getDirectoryHandle(x);
+      a.blob=await (await cur.getFileHandle(parts[parts.length-1])).getFile();}catch(e){}
+  }
+  return d;
+}
+function folderUI(){
+  const b=document.getElementById('verBtn');
+  if(b){b.classList.toggle('warn',Folder.state==='need');b.textContent=Folder.state==='need'?'폴더 저장 허용 필요':'버전 기록';}
+  const box=document.getElementById('fsBox');if(box&&box.__draw)box.__draw();
+}
+function hhmm(t){const d=new Date(t);return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}
+function whenLabel(t){const d=new Date(t),n=new Date();
+  return (localDay(t)===localDay(n)?'오늘 ':(d.getMonth()+1)+'월 '+d.getDate()+'일 ')+hhmm(t);}
+/* 브라우저가 저장소를 함부로 비우지 않도록 요청 */
+async function storageGuard(ask){
+  const S=navigator.storage;if(!S||!S.persisted)return {persisted:null};
+  let p=await S.persisted().catch(()=>false);
+  if(!p&&ask&&S.persist)p=await S.persist().catch(()=>false);
+  let est=null;try{est=S.estimate?await S.estimate():null;}catch(e){}
+  return {persisted:p,usage:est&&est.usage,quota:est&&est.quota};
+}
+function mb(n){return n==null?'?':n>=1073741824?(n/1073741824).toFixed(1)+'GB':Math.round(n/1048576)+'MB';}
+
+/* ── 저장 · 버전 기록 창 ── */
+async function openSaveCenter(){
+  await flushSaveNow();
+  const ov=document.createElement('div');ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  const box=document.createElement('div');box.style.cssText='background:var(--surface);color:var(--text);border-radius:14px;padding:16px 18px;width:min(860px,96vw);max-height:92vh;overflow:auto;';
+  box.innerHTML='<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;"><b style="font-size:16px;">저장 · 버전 기록</b><span class="msg" data-m></span>'+
+    '<span style="margin-left:auto;"><button class="btn small ghost" data-x>닫기</button></span></div>'+
+    '<div class="card" style="padding:12px 14px;margin-bottom:10px;"><div style="font-weight:600;margin-bottom:6px;">저장 공간</div><div data-sto class="sc-note">확인 중…</div></div>'+
+    '<div class="card" style="padding:12px 14px;margin-bottom:10px;" id="fsBox"><div style="font-weight:600;margin-bottom:6px;">폴더 자동 저장</div><div data-fs></div><div data-fr style="margin-top:8px;"></div></div>'+
+    '<div class="card" style="padding:12px 14px;margin-bottom:10px;"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;"><b>버전 기록 · <span data-lt></span></b>'+
+      '<span style="margin-left:auto;display:flex;gap:6px;align-items:center;"><input data-nm placeholder="이름 (선택)" style="width:150px;"><button class="btn small primary" data-save>지금 버전 저장</button></span></div>'+
+      '<label class="sc-note" style="display:flex;gap:6px;align-items:center;margin:0 0 8px;"><input type="checkbox" data-wc> 디자인·캐릭터·자료실 같은 과정 설정까지 함께 되살리기</label>'+
+      '<div data-list class="sc-note">불러오는 중…</div></div>'+
+    '<div class="card" style="padding:12px 14px;" data-orph hidden><div style="font-weight:600;margin-bottom:6px;">지운 차시 되살리기</div><div data-ol></div></div>'+
+    '<p class="sc-note" style="margin-top:10px;">되돌리기(↶ ↷)는 이 창 밖에서 Ctrl+Z · Ctrl+Shift+Z 로도 됩니다 (글 입력칸 안에서는 그 칸의 되돌리기). '+
+      '버전 사본에는 영상·음악 파일 자체가 들어가지 않으므로, 지운 파일은 폴더 저장이나 과정 백업에서 되살려야 합니다.</p>';
+  ov.appendChild(box);document.body.appendChild(ov);
+  const q=s=>box.querySelector(s),msg=q('[data-m]');
+  const say=(t,cls)=>{msg.className='msg'+(cls?' '+cls:'');msg.textContent=t;};
+  const close=()=>{ov.remove();const y=window.scrollY;renderRail();renderMain();window.scrollTo(0,y);};
+  q('[data-x]').onclick=close;
+  // 저장 공간
+  const drawSto=async ask=>{const g=await storageGuard(ask),el=q('[data-sto]');
+    el.innerHTML=(g.usage!=null?'브라우저 저장소 '+mb(g.usage)+' 사용 · 약 '+mb(g.quota)+'까지 가능<br>':'')+
+      (g.persisted===true?'지우지 않기 보호: <b>켜짐</b> — 저장 공간이 모자라도 브라우저가 이 도구의 자료를 지우지 않습니다':
+       g.persisted===false?'지우지 않기 보호: <b>꺼짐</b> — 디스크가 부족하면 브라우저가 자료를 지울 수 있습니다. <button class="btn small" data-pg>보호 요청</button> (거절되면 폴더 자동 저장을 켜 두세요)':
+       '이 브라우저는 저장소 보호 상태를 알려 주지 않습니다');
+    const b=el.querySelector('[data-pg]');if(b)b.onclick=()=>drawSto(true);};
+  drawSto(false);
+  // 폴더
+  const fsBox=q('#fsBox');
+  fsBox.__draw=function(){
+    const el=q('[data-fs]');
+    if(Folder.state==='unsupported'){el.innerHTML='<span class="sc-note">이 브라우저는 폴더 저장을 지원하지 않습니다 (Chrome·Edge에서 쓸 수 있습니다). 대신 위의 <b>과정 백업</b>을 자주 받아 두세요.</span>';return;}
+    const st=Folder.state==='on'?'<b style="color:var(--success)">켜짐</b> · 폴더 「'+esc(Folder.h&&Folder.h.name||'')+'」'+(Folder.busy?' · 저장 중…':Folder.last?' · 마지막 저장 '+whenLabel(Folder.last):''):
+      Folder.state==='need'?'<b style="color:var(--danger)">허용 필요</b> · 폴더 「'+esc(Folder.h&&Folder.h.name||'')+'」 — 브라우저를 다시 열면 한 번 더 허용해야 합니다':'<b>꺼짐</b>';
+    el.innerHTML='<div style="margin-bottom:6px;">'+st+(Folder.err?'<div class="msg fail" style="margin-top:4px;">'+esc(Folder.err)+'</div>':'')+'</div>'+
+      '<div class="row-actions" style="display:flex;gap:6px;flex-wrap:wrap;">'+
+      (Folder.state==='on'?'<button class="btn small" data-f="now">지금 저장</button><button class="btn small ghost" data-f="pick">다른 폴더로</button><button class="btn small ghost" data-f="off">끄기</button>':
+       Folder.state==='need'?'<button class="btn small primary" data-f="grant">다시 허용</button><button class="btn small ghost" data-f="pick">다른 폴더로</button><button class="btn small ghost" data-f="off">끄기</button>':
+       '<button class="btn small primary" data-f="pick">폴더 고르기</button>')+
+      '<button class="btn small ghost" data-f="load">폴더에서 되살리기</button></div>'+
+      '<p class="sc-note" style="margin:6px 0 0;">고친 뒤 15초 안에 「과정 이름/과정.occp-course.json」과 「자료/」(음성·영상·3D 모델)에 써 둡니다. 「날짜별/」에 하루 하나씩 30일치 사본이 남습니다. '+
+      '클라우드 동기화 폴더(OneDrive·구글 드라이브 등)를 고르면 다른 PC에도 사본이 생깁니다.</p>';
+    el.querySelectorAll('[data-f]').forEach(b=>b.onclick=async function(){
+      const f=b.dataset.f;
+      try{
+        if(f==='pick'){await folderConnect();say('폴더 저장을 켰습니다','ok');}
+        else if(f==='grant'){await folderGrant();}
+        else if(f==='now'){await folderSaveNow();say(Folder.err?'폴더 저장 실패':'폴더에 저장했습니다',Folder.err?'fail':'ok');}
+        else if(f==='off'){await folderDisconnect();}
+        else if(f==='load')await pickFolderRestore();
+      }catch(e){if(e&&e.name==='AbortError')return;say(e.message||String(e),'fail');}
+      fsBox.__draw();});
+  };
+  fsBox.__draw();
+  async function pickFolderRestore(){
+    const h=await window.showDirectoryPicker({id:'occp-save',mode:'read'});
+    const found=await folderFind(h),fr=q('[data-fr]');
+    if(!found.length){fr.innerHTML='<div class="msg fail">이 폴더에서 과정 파일(과정.occp-course.json)을 찾지 못했습니다</div>';return;}
+    fr.innerHTML=found.map((c,ci)=>'<div style="margin-bottom:6px;"><b>'+esc(c.label)+'</b> '+
+      '<select data-fv="'+ci+'">'+c.vers.map((v,vi)=>'<option value="'+vi+'">'+esc(v.label)+'</option>').join('')+'</select> '+
+      '<button class="btn small" data-fl="'+ci+'">이 사본으로 되살리기</button></div>').join('');
+    fr.querySelectorAll('[data-fl]').forEach(b=>b.onclick=async function(){
+      const c=found[+b.dataset.fl],v=c.vers[+fr.querySelector('[data-fv="'+b.dataset.fl+'"]').value];
+      try{say('불러오는 중…');const d=await folderLoad(c.dir,v.fh);await importCourseBundle(d);activeStageId='overview';
+        say('「'+course.name+'」을(를) 되살렸습니다 (차시 '+course.lessons.length+'개)','ok');drawList();}
+      catch(e){say('되살리지 못했습니다: '+e.message,'fail');}});
+  }
+  // 버전 목록
+  async function drawList(){
+    q('[data-lt]').textContent=lessonLabel(lessonSummary(project));
+    const idx=await snapIdx(project.id),el=q('[data-list]');
+    if(Store.mode()!=='idb'){el.textContent='이 브라우저 저장소에서는 버전 기록을 쓸 수 없습니다';return;}
+    el.innerHTML=idx.length?idx.map((m,i)=>'<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--border);">'+
+      '<span style="min-width:112px;font-family:\'IBM Plex Mono\',monospace;font-size:12px;">'+whenLabel(m.at)+'</span>'+
+      '<span class="chip" style="font-size:11px;padding:1px 7px;border:1px solid var(--border);border-radius:10px;">'+(SNAP_KIND[m.kind]||m.kind)+'</span>'+
+      '<span style="flex:1;font-size:12.5px;">'+esc(m.label||'')+(m.label?' · ':'')+'씬 '+m.scenes+' · 대본 '+(m.chars||0).toLocaleString()+'자 · 음성 '+m.voiced+'</span>'+
+      '<button class="btn small" data-r="'+i+'">되살리기</button><button class="btn small ghost" data-d="'+i+'" title="이 사본 지우기">×</button></div>').join(''):
+      '아직 사본이 없습니다. 고치기 시작하면 5분마다 자동으로 남습니다.';
+    el.querySelectorAll('[data-r]').forEach(b=>b.onclick=async function(){
+      const m=idx[+b.dataset.r],wc=q('[data-wc]').checked;
+      if(!confirm(whenLabel(m.at)+' 사본으로 되살릴까요?\n지금 상태도 사본으로 남겨 두므로 다시 돌아올 수 있습니다.'+(wc?'\n(과정 설정까지 함께 되살립니다)':'')))return;
+      try{const miss=await snapRestore(m,wc);say('되살렸습니다'+(miss?' · 큰 자료 '+miss+'개는 찾지 못했습니다':''),miss?'fail':'ok');drawList();}
+      catch(e){say(e.message,'fail');}});
+    el.querySelectorAll('[data-d]').forEach(b=>b.onclick=async function(){await snapDelete(idx[+b.dataset.d]);drawList();});
+    // 지운 차시
+    const live=new Set((await Store.all('lessons')).map(l=>l.id)),orph=[];
+    for(const k of await Store.raw.keys('kv:snapidx:')){const lid=k.slice(11);if(live.has(lid))continue;const ix=(await Store.raw.get(k))||[];if(ix[0])orph.push(ix[0]);}
+    const ob=q('[data-orph]');ob.hidden=!orph.length;
+    orph.sort((a,b)=>b.at-a.at);
+    q('[data-ol]').innerHTML=orph.map((m,i)=>'<div style="display:flex;gap:8px;align-items:center;padding:5px 0;border-top:1px solid var(--border);font-size:12.5px;">'+
+      '<span style="flex:1;">'+esc((m.courseName?m.courseName+' · ':'')+(m.no?m.no+'차시 ':'')+(m.title||''))+' · 씬 '+m.scenes+' · '+whenLabel(m.at)+' 사본</span>'+
+      '<button class="btn small" data-o="'+i+'">되살리기</button></div>').join('');
+    q('[data-ol]').querySelectorAll('[data-o]').forEach(b=>b.onclick=async function(){
+      try{await snapRevive(orph[+b.dataset.o]);say('차시를 되살렸습니다','ok');drawList();}catch(e){say(e.message,'fail');}});
+  }
+  q('[data-save]').onclick=async function(){
+    const nm=q('[data-nm]').value.trim();
+    await flushSaveNow();await snapQueue(()=>snapTake('manual',nm||'직접 저장'));q('[data-nm]').value='';say('지금 상태를 사본으로 남겼습니다','ok');drawList();};
+  drawList();
+}
+
+document.addEventListener('visibilitychange',function(){
+  if(!document.hidden)return;
+  if(_saveTimer)flushSaveNow();
+  if(Folder.timer){clearTimeout(Folder.timer);Folder.timer=null;folderSaveNow();}   // 탭을 떠날 때는 기다리지 않고 바로 폴더에
+});
 window.addEventListener('beforeunload',function(){if(_saveTimer)flushSave();});
 
 async function boot(){
   await Store.open();
+  storageGuard(true).catch(()=>{});
+  folderBoot().catch(()=>{});
   allCourses=(await Store.all('courses')).map(normalizeCourse);
   if(!allCourses.length){
     // 예전 버전(한 차시만 저장)에서 옮겨옵니다
@@ -1621,6 +2041,7 @@ function renderRail(){
 }
 
 function renderMain(){
+  histEnsure();
   fullPrevStop();                                      // 장 전체 미리보기는 화면을 떠나면 정리 (스튜디오·3D 렌더러를 놓아줌)
   renderHeader();
   if(activeStageId==='overview'){main.innerHTML='';return renderOverview();}
@@ -3699,8 +4120,9 @@ async function duplicateLesson(id){
 async function deleteLesson(id){
   const l=course.lessons.find(x=>x.id===id);
   if(!l)return;
-  if(!confirm('"'+lessonLabel(l)+'"을(를) 삭제할까요?\n목차·대본이 모두 지워집니다. 되돌릴 수 없습니다.'))return;
+  if(!confirm('"'+lessonLabel(l)+'"을(를) 삭제할까요?\n목차·대본이 모두 지워집니다. (버전 기록 → 지운 차시 되살리기로 되살릴 수 있습니다)'))return;
   await flushSaveNow();
+  try{const rec=project.id===id?null:await Store.get('lessons',id);if(project.id===id||rec)await snapQueue(()=>snapTake('before','차시 삭제 전',rec,course));}catch(e){}
   await Store.del('lessons',id);
   course.lessons=course.lessons.filter(x=>x.id!==id);
   if(project.id===id){
@@ -3715,7 +4137,9 @@ async function deleteCourse(){
   const n=course.lessons.length;
   const typed=prompt('과정 "'+course.name+'"과 차시 '+n+'개를 모두 삭제합니다.\n확인하려면 과정 이름을 그대로 입력하세요.','');
   if(typed!==course.name)return;
+  await flushSaveNow();
   const ls=(await Store.all('lessons')).filter(l=>l.courseId===course.id);
+  for(const l of ls){try{await snapQueue(()=>snapTake('before','과정 삭제 전',l,course));}catch(e){}}
   for(const l of ls)await Store.del('lessons',l.id);
   await Store.del('courses',course.id);
   allCourses=allCourses.filter(c=>c.id!==course.id);
@@ -3833,22 +4257,10 @@ function renderOverview(){
 async function exportCourse(){
   await flushSaveNow();
   const ls=(await Store.all('lessons')).filter(l=>l.courseId===course.id).sort(byNo);
+  // 과정이 쓰는 저장 파일 모두 (음성 사본·강사 영상·3D 모델·움직임 파일·배경음악 …) — 다른 PC에서 되살려도 그대로 렌더되도록
   const assets=[];
-  for(const k of Object.keys(course.media||{})){
-    const m=course.media[k];if(!m)continue;
-    const b=await Store.getBlob(m.id);if(b)assets.push({id:m.id,type:b.type||m.type||'',data:await blobToDataUrl(b)});
-  }
-  // 음성 사본도 함께 (다른 PC에서 복원해도 렌더에 소리가 들어가도록)
-  const seen=new Set(assets.map(a=>a.id));
-  for(const rec of ls){
-    const sc=[];(rec.units||[]).forEach(u=>(u.scenes||[]).forEach(x=>sc.push(x)));
-    if(rec.parts)[rec.parts.opening,rec.parts.closing].forEach(pp=>pp&&(pp.scenes||[]).forEach(x=>sc.push(x)));
-    for(const x of sc){
-      for(const ref of [x.audioLocal,x.presenterVid]){
-        if(!ref||seen.has(ref.id))continue;seen.add(ref.id);
-        const b=await Store.getBlob(ref.id).catch(()=>null);if(b)assets.push({id:ref.id,type:b.type||'',data:await blobToDataUrl(b)});
-      }
-    }
+  for(const id of await courseBlobIds([course,ls])){
+    const b=await Store.getBlob(id).catch(()=>null);if(b)assets.push({id:id,type:b.type||'',data:await blobToDataUrl(b)});
   }
   const data={kind:'occp-course',version:4,exportedAt:new Date().toISOString(),course:course,lessons:ls,assets:assets};
   const n=(course.name||'course').replace(/[\\/:*?"<>|]/g,'_');
@@ -3902,12 +4314,14 @@ async function importCourseBundle(d){
     c.lessons=(c.lessons||[]).map(s=>Object.assign({},s,{id:map[s.id]||uid('l')}));
     d.lessons=(d.lessons||[]).map(l=>Object.assign({},l,{id:map[l.id],courseId:c.id}));
   }else if(exists){
+    if(course&&course.id===exists.id)await flushSaveNow();
     const old=(await Store.all('lessons')).filter(l=>l.courseId===c.id);
+    for(const l of old){try{await snapQueue(()=>snapTake('before','가져오기로 덮어쓰기 전',l,exists));}catch(e){}}
     for(const l of old)await Store.del('lessons',l.id);
   }
   for(const l of (d.lessons||[])){l.courseId=c.id;await Store.put('lessons',l);}
   for(const a of (d.assets||[])){
-    try{const b=await (await fetch(a.data)).blob();await Store.putBlob(a.id,b);}catch(e){}
+    try{const b=a.blob||await (await fetch(a.data)).blob();await Store.putBlob(a.id,b);}catch(e){}
   }
   await Store.put('courses',c);
   // 처음 열 때 자동으로 생긴 빈 과정은 치웁니다 (자료·대본이 전혀 없는 경우만)
@@ -11235,6 +11649,9 @@ document.getElementById('lessonSel').addEventListener('change',function(e){
 document.getElementById('overviewBtn').addEventListener('click',function(){
   if(busy)return;activeStageId='overview';renderRail();renderMain();});
 document.getElementById('exportBtn').addEventListener('click',exportCourse);
+document.getElementById('undoBtn').addEventListener('click',()=>histGo(-1));
+document.getElementById('redoBtn').addEventListener('click',()=>histGo(1));
+document.getElementById('verBtn').addEventListener('click',openSaveCenter);
 document.getElementById('importBtn').addEventListener('click',function(){document.getElementById('importFile').click();});
 document.getElementById('importFile').addEventListener('change',function(e){
   const file=e.target.files&&e.target.files[0];if(!file)return;
