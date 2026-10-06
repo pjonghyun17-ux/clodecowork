@@ -2096,7 +2096,9 @@ function ensureParts(s){
   s.ttsParts=disp.map(function(d){
     const read=manualAll?d:readOf(d);
     const o=old.find(p=>p.read===read&&p.ref);
-    return {id:uid('tp'),disp:d,read:read,manual:false,ref:o?o.ref:null,sec:o?o.sec:0,trim:o?o.trim:null,flag:o?o.flag:''};
+    const np={id:uid('tp'),disp:d,read:read,manual:false,ref:o?o.ref:null,sec:o?o.sec:0,trim:o?o.trim:null,flag:o?o.flag:''};
+    if(o){['cuts','gapAfter','local','full'].forEach(k=>{if(o[k]!=null)np[k]=o[k];});}   // 같은 소리면 컷편집·사본도 그대로
+    return np;
   });
   s.ttsPartsSrc=src;s.ttsPartsMax=max;s.ttsFromText=manualAll;
   return s.ttsParts;
@@ -2162,23 +2164,57 @@ async function generatePart(s,p,wf,opts,onTick,last){
     res={ref:au,an:an};
     if(!an.suspect)break;
   }
-  p.ref=res.ref;p.trim=[res.an.start,res.an.end];p.sec=+res.an.sec.toFixed(2);p.flag=res.an.suspect||'';
+  p.ref=res.ref;p.trim=[res.an.start,res.an.end];p.sec=+res.an.sec.toFixed(2);p.flag=res.an.suspect||'';p.cuts=[];   // 새 소리라 컷편집은 지움
   return p;
 }
-/* 조각을 이어 붙여 한 파일로 올립니다 */
+/* ── 음성 컷편집 ──
+   조각마다 잘라낼 구간(p.cuts, 조각 안 시각)과 다음 조각까지의 쉼(p.gapAfter, 비우면 기본 0.28초)을 적어 두고
+   이어 붙일 때 적용합니다. 원본 조각 소리는 그대로라 언제든 되돌릴 수 있고, 조각 하나를 다시 만들면 그 조각의 편집만 지워집니다. */
+function partGap(P,i){if(i>=P.length-1)return 0;const g=P[i].gapAfter;return g!=null?Math.max(0,Math.min(3,+g||0)):TTS_GAP;}
+function partKeep(p,full){                 // 남길 구간들 (조각 안 시각, 초)
+  const a=p.trim?p.trim[0]:0,b=(p.trim&&p.trim[1]>0)?p.trim[1]:(full||p.full||p.sec||0);
+  let segs=[[a,b]];
+  (p.cuts||[]).forEach(c=>{const o=[];segs.forEach(g=>{if(c[1]<=g[0]||c[0]>=g[1]){o.push(g);return;}if(c[0]>g[0])o.push([g[0],c[0]]);if(c[1]<g[1])o.push([c[1],g[1]]);});segs=o;});
+  return segs.filter(g=>g[1]-g[0]>0.005);
+}
+function partLen(p,full){return partKeep(p,full).reduce((x,g)=>x+g[1]-g[0],0);}
+function addCut(p,a,b){                    // 잘라낼 구간 더하기 (겹치면 합침)
+  const L=(p.cuts||[]).concat([[Math.min(a,b),Math.max(a,b)]]).sort((x,y)=>x[0]-y[0]),out=[];
+  L.forEach(c=>{const l=out[out.length-1];if(l&&c[0]<=l[1]+0.002)l[1]=Math.max(l[1],c[1]);else out.push([+c[0].toFixed(3),+c[1].toFixed(3)]);});
+  p.cuts=out;
+}
+/* 조각 소리: 이 PC에 둔 사본 → 없으면 ComfyUI에서 받아 사본을 남김 (편집하려고 다시 열 때 ComfyUI가 꺼져 있어도 되게) */
+async function partPCM(p){
+  let ab=null;
+  if(p.local&&p.local.of===p.ref.filename){const b=await Store.getBlob(p.local.id).catch(()=>null);if(b)ab=await b.arrayBuffer();}
+  if(!ab){
+    ab=await (await fetch(comfyViewUrl(p.ref))).arrayBuffer();
+    try{const id=uid('ap');await Store.putBlob(id,new Blob([ab],{type:'audio/wav'}));if(p.local)Store.delBlob(p.local.id).catch(()=>{});p.local={id:id,of:p.ref.filename};}catch(e){}
+  }
+  const buf=await new OfflineAudioContext(1,1,TTS_SR).decodeAudioData(ab);
+  return buf.getChannelData(0);
+}
+/* 조각을 이어 붙여 한 파일로 올립니다 (컷편집 적용 · 자른 자리는 아주 짧게 페이드해 '틱' 소리가 나지 않게) */
 async function joinParts(s,onTick){
   const P=s.ttsParts.filter(p=>p.ref);
   if(!P.length)throw new Error('생성된 조각이 없습니다');
   if(onTick)onTick(0,'조각 이어 붙이는 중');
-  const gap=Math.round(TTS_GAP*TTS_SR),segs=[];
-  for(const p of P){
-    const b=await decodeRef(p.ref),d=b.getChannelData(0);
-    const a=Math.round((p.trim?p.trim[0]:0)*TTS_SR),e=Math.round((p.trim&&p.trim[1]>0?p.trim[1]:d.length/TTS_SR)*TTS_SR);
-    segs.push(d.subarray(a,Math.max(a+1,Math.min(d.length,e))));
+  const segs=[],F=Math.round(0.006*TTS_SR);
+  for(let i=0;i<P.length;i++){
+    const p=P[i],d=await partPCM(p),full=d.length/TTS_SR;p.full=+full.toFixed(3);
+    const keep=partKeep(p,full);
+    keep.forEach(function(k){
+      const a=Math.max(0,Math.round(k[0]*TTS_SR)),e=Math.min(d.length,Math.max(a+1,Math.round(k[1]*TTS_SR)));
+      const g=d.slice(a,e),f=Math.min(F,Math.floor(g.length/2));
+      for(let j=0;j<f;j++){const w=j/f;g[j]*=w;g[g.length-1-j]*=w;}
+      segs.push(g);
+    });
+    p.sec=+partLen(p,full).toFixed(2);
+    const gp=Math.round(partGap(P,i)*TTS_SR);if(gp>0)segs.push(new Float32Array(gp));
   }
-  const total=segs.reduce((x,g)=>x+g.length,0)+gap*(segs.length-1);
+  const total=segs.reduce((x,g)=>x+g.length,0);
   const pcm=new Float32Array(total);let off=0;
-  segs.forEach(function(g,i){pcm.set(g,off);off+=g.length+(i<segs.length-1?gap:0);});
+  segs.forEach(function(g){pcm.set(g,off);off+=g.length;});
   const file=new File([encodeWav(pcm,TTS_SR)],'tts_'+s.id+'_'+Date.now()+'.wav',{type:'audio/wav'});
   s.audioOut=await comfyUpload(file);
   try{const id=uid('au');await Store.putBlob(id,file);if(s.audioLocal)Store.delBlob(s.audioLocal.id).catch(()=>{});
@@ -2444,6 +2480,143 @@ function renderDictCard(){
     project.dict=defaultDict();persist();renderScriptStageKeepScroll();});
 }
 
+/* 음성 컷편집 화면: 파형에서 구간을 끌어 고른 뒤 잘라내고, 조각 사이 쉼을 조절하고, 긴 쉼을 한 번에 줄입니다.
+   편집은 바로 저장되고(되돌리기 가능), '적용'을 누르면 이어 붙여 영상에 쓰는 음성이 바뀝니다. */
+function audioCutEditor(s,onApply){
+  const el=document.createElement('div');
+  el.style.cssText='border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:10px;background:var(--bg);';
+  const P=(s.ttsParts||[]).filter(p=>p.ref);
+  if(!P.length){el.innerHTML='<p class="note" style="margin:0;">먼저 음성을 만드세요.</p>';return el;}
+  el.innerHTML='<div class="lorarow" style="gap:6px;flex-wrap:wrap;margin:0 0 8px;">'+
+      '<button class="btn small" data-c="play">▶ 재생</button><button class="btn small" data-c="stop">■</button>'+
+      '<button class="btn small" data-c="cut" title="끌어서 고른 구간을 잘라냅니다 (Delete 키)">✂ 선택 구간 잘라내기</button>'+
+      '<button class="btn small ghost" data-c="undo">↶ 되돌리기</button>'+
+      '<span style="flex:1"></span>'+
+      '<span class="note" style="margin:0;font-size:12px;">긴 쉼</span><input type="number" data-c="pl" value="0.5" step="0.1" min="0.2" max="3" style="width:58px;font-size:12px;padding:3px;">'+
+      '<span class="note" style="margin:0;font-size:12px;">초 넘으면</span><input type="number" data-c="pk" value="0.3" step="0.05" min="0.05" max="1.5" style="width:58px;font-size:12px;padding:3px;">'+
+      '<span class="note" style="margin:0;font-size:12px;">초로</span><button class="btn small" data-c="pause">줄이기</button>'+
+      '<button class="btn small ghost" data-c="clear">편집 모두 지우기</button></div>'+
+    '<canvas data-c="wave" width="1400" height="150" style="width:100%;height:118px;cursor:crosshair;border-radius:6px;background:var(--surface-2);display:block;touch-action:none;"></canvas>'+
+    '<div class="msg" data-c="info" style="margin-top:5px;font-size:12px;">조각 소리를 불러오는 중…</div>'+
+    '<div data-c="gaps" style="display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:8px;"></div>'+
+    '<div class="row-actions" style="margin-top:9px;"><button class="btn small primary" data-c="apply">적용 (이어 붙이기)</button>'+
+      '<span class="note" style="margin:0;font-size:11.5px;">끌어서 구간 선택 · 클릭해서 재생 위치 · Delete 로 잘라내기 · 스페이스로 재생/멈춤</span></div>';
+  const q=k=>el.querySelector('[data-c="'+k+'"]'),cv=q('wave'),info=q('info');
+  let pcm=null,tl=null,sel=null,cursor=0,undo=[],ac=null,src=null,playAt=0,playFrom=0,playTo=0,raf=0;
+  const snap=()=>JSON.stringify(P.map(p=>[p.cuts||[],p.gapAfter==null?null:p.gapAfter]));
+  const restore=j=>JSON.parse(j).forEach((x,i)=>{P[i].cuts=x[0];if(x[1]==null)delete P[i].gapAfter;else P[i].gapAfter=x[1];});
+  const changed=()=>{s.audioStale=true;persist();build();draw();gapsUI();};
+  // 편집이 적용된 시간표: 남긴 조각 소리(pieces)와 쉼(gaps)을 차례로
+  function build(){
+    const pieces=[],gaps=[],out=[];let t=0;
+    P.forEach(function(p,i){
+      const d=pcm[i],full=d.length/TTS_SR;
+      partKeep(p,full).forEach(function(k,j){
+        pieces.push({i:i,first:j===0,s0:k[0],s1:k[1],d0:t,d1:t+k[1]-k[0]});
+        out.push(d.subarray(Math.round(k[0]*TTS_SR),Math.round(k[1]*TTS_SR)));t+=k[1]-k[0];});
+      const g=partGap(P,i);if(g>0){gaps.push({i:i,d0:t,d1:t+g});out.push(new Float32Array(Math.round(g*TTS_SR)));t+=g;}
+    });
+    const n=out.reduce((a,x)=>a+x.length,0),all=new Float32Array(n);let o=0;out.forEach(x=>{all.set(x,o);o+=x.length;});
+    tl={pieces:pieces,gaps:gaps,dur:t,pcm:all};
+    const cut=P.reduce((a,p)=>a+(p.cuts||[]).length,0),orig=P.reduce((a,p,i)=>a+partLen({trim:p.trim},pcm[i].length/TTS_SR)+(i<P.length-1?TTS_GAP:0),0);
+    info.className='msg';info.textContent='길이 '+t.toFixed(1)+'초'+(cut?' · 잘라낸 곳 '+cut+'군데':'')+(Math.abs(orig-t)>0.05?' · 원래보다 '+(t<orig?'−':'+')+Math.abs(orig-t).toFixed(1)+'초':'')+
+      (s.audioStale?' · 적용 전 (영상에는 아직 예전 음성)':'');
+  }
+  function css(v,f){const x=getComputedStyle(document.documentElement).getPropertyValue(v).trim();return x||f;}
+  function draw(){
+    const x=cv.getContext('2d'),W=cv.width,H=cv.height;x.clearRect(0,0,W,H);
+    if(!tl)return;
+    const T2X=W/Math.max(0.01,tl.dur),acc=css('--accent','#f0b23c'),dim=css('--text-dim','#8b93a5'),txt=css('--text','#e9e7e0');
+    // 쉼(조각 사이)
+    x.fillStyle='rgba(127,127,127,.16)';tl.gaps.forEach(g=>x.fillRect(g.d0*T2X,0,(g.d1-g.d0)*T2X,H));
+    // 파형: 열마다 최대·최소
+    const N=tl.pcm.length,spp=Math.max(1,Math.floor(N/W));
+    tl.pieces.forEach(function(pc,k){
+      x.fillStyle=pc.i%2?acc:css('--info','#5b8fd6');
+      const a=Math.floor(pc.d0*T2X),b=Math.ceil(pc.d1*T2X);
+      for(let px=a;px<b;px++){
+        const i0=Math.floor(px/W*N);let mn=0,mx=0;
+        for(let j=i0;j<Math.min(N,i0+spp);j+=2){const v=tl.pcm[j];if(v<mn)mn=v;if(v>mx)mx=v;}
+        const y0=H/2-mx*H*0.46,y1=H/2-mn*H*0.46;x.fillRect(px,y0,1,Math.max(1,y1-y0));
+      }
+      if(pc.first){x.fillStyle=txt;x.font='bold 20px sans-serif';x.fillText(String(pc.i+1),a+4,20);}
+      else{x.strokeStyle='#e2574c';x.lineWidth=2;x.beginPath();x.moveTo(a,0);x.lineTo(a,H);x.stroke();}   // 잘라낸 자리
+    });
+    if(sel){x.fillStyle='rgba(226,87,76,.25)';x.fillRect(sel[0]*T2X,0,(sel[1]-sel[0])*T2X,H);x.strokeStyle='#e2574c';x.lineWidth=2;x.strokeRect(sel[0]*T2X,1,(sel[1]-sel[0])*T2X,H-2);}
+    const ph=src?playFrom+(ac.currentTime-playAt):cursor;
+    x.strokeStyle=src?txt:dim;x.lineWidth=2;x.beginPath();x.moveTo(ph*T2X,0);x.lineTo(ph*T2X,H);x.stroke();
+  }
+  function gapsUI(){
+    const g=q('gaps');g.innerHTML='';
+    for(let i=0;i<P.length-1;i++){
+      const lab=document.createElement('label');lab.style.cssText='font-size:12px;display:flex;align-items:center;gap:4px;color:var(--text-dim);';
+      lab.innerHTML='쉼 '+(i+1)+'↔'+(i+2)+' <input type="number" step="0.05" min="0" max="3" value="'+partGap(P,i).toFixed(2)+'" style="width:62px;font-size:12px;padding:3px;">초';
+      const inp=lab.querySelector('input');
+      inp.addEventListener('change',function(){const v=Math.max(0,Math.min(3,parseFloat(inp.value)||0));if(Math.abs(v-partGap(P,i))<0.001)return;undo.push(snap());P[i].gapAfter=v;changed();});
+      g.appendChild(lab);
+    }
+  }
+  // 고른 구간 잘라내기: 조각 소리 부분은 그 조각의 잘라낼 구간으로, 쉼 부분은 쉼을 줄임
+  function cutSel(){
+    if(!sel||sel[1]-sel[0]<0.01)return;
+    undo.push(snap());
+    const A=sel[0],B=sel[1];
+    tl.pieces.forEach(pc=>{const a=Math.max(A,pc.d0),b=Math.min(B,pc.d1);if(b-a>0.002)addCut(P[pc.i],pc.s0+(a-pc.d0),pc.s0+(b-pc.d0));});
+    tl.gaps.forEach(g=>{const a=Math.max(A,g.d0),b=Math.min(B,g.d1);if(b-a>0.002)P[g.i].gapAfter=Math.max(0,+(partGap(P,g.i)-(b-a)).toFixed(3));});
+    cursor=A;sel=null;changed();
+  }
+  // 긴 쉼 줄이기: 조각 안에서 소리가 거의 없는 구간이 L초를 넘으면 K초만 남김 (앞뒤로 반씩)
+  function shortenPauses(){
+    const L=Math.max(0.2,parseFloat(q('pl').value)||0.5),K=Math.max(0.05,Math.min(L,parseFloat(q('pk').value)||0.3));
+    undo.push(snap());let n=0;
+    P.forEach(function(p,i){
+      const d=pcm[i],win=Math.round(TTS_SR*0.02),full=d.length/TTS_SR;
+      partKeep(p,full).forEach(function(k){
+        let run=-1;
+        const a=Math.round(k[0]*TTS_SR/win),b=Math.round(k[1]*TTS_SR/win);
+        for(let w=a;w<=b;w++){
+          let e=0;if(w<b){for(let j=w*win;j<Math.min(d.length,(w+1)*win);j+=2)e+=d[j]*d[j];e=Math.sqrt(e/(win/2));}
+          const quiet=w<b&&e<0.012;
+          if(quiet&&run<0)run=w;
+          if(!quiet&&run>=0){const t0=run*win/TTS_SR,t1=w*win/TTS_SR;
+            if(t1-t0>L&&t0>k[0]+0.05&&t1<k[1]-0.05){addCut(p,t0+K/2,t1-K/2);n++;}run=-1;}
+        }
+      });
+      if(i<P.length-1&&partGap(P,i)>L){p.gapAfter=K;n++;}
+    });
+    if(!n){undo.pop();info.className='msg';info.textContent='줄일 긴 쉼이 없습니다';return;}
+    changed();info.className='msg ok';info.textContent+=' · 긴 쉼 '+n+'군데를 줄였습니다';
+  }
+  function stop(){if(src){try{src.stop();}catch(e){}src=null;}cancelAnimationFrame(raf);draw();}
+  function play(){
+    stop();if(!tl||!tl.pcm.length)return;
+    ac=ac||new (window.AudioContext||window.webkitAudioContext)();
+    const b=ac.createBuffer(1,tl.pcm.length,TTS_SR);b.getChannelData(0).set(tl.pcm);
+    src=ac.createBufferSource();src.buffer=b;src.connect(ac.destination);
+    playFrom=sel?sel[0]:(cursor>=tl.dur-0.05?0:cursor);playTo=sel?sel[1]:tl.dur;
+    playAt=ac.currentTime+0.02;src.start(playAt,playFrom,Math.max(0.01,playTo-playFrom));
+    src.onended=()=>{src=null;cancelAnimationFrame(raf);draw();};
+    const tick=()=>{draw();if(src)raf=requestAnimationFrame(tick);};tick();
+  }
+  // 끌어서 고르기 / 클릭해서 재생 위치
+  let down=null;
+  const tAt=e=>{const r=cv.getBoundingClientRect();return Math.max(0,Math.min(tl?tl.dur:0,(e.clientX-r.left)/r.width*(tl?tl.dur:0)));};
+  cv.addEventListener('pointerdown',e=>{if(!tl)return;cv.setPointerCapture(e.pointerId);down={t:tAt(e),x:e.clientX};sel=null;draw();});
+  cv.addEventListener('pointermove',e=>{if(!down)return;if(Math.abs(e.clientX-down.x)>3){const t=tAt(e);sel=[Math.min(down.t,t),Math.max(down.t,t)];draw();}});
+  cv.addEventListener('pointerup',e=>{if(!down)return;if(Math.abs(e.clientX-down.x)<=3){cursor=down.t;sel=null;}down=null;draw();});
+  el.tabIndex=0;
+  el.addEventListener('keydown',e=>{if((e.key==='Delete'||e.key==='Backspace')&&sel){e.preventDefault();cutSel();}else if(e.key===' '){e.preventDefault();src?stop():play();}});
+  q('play').addEventListener('click',play);q('stop').addEventListener('click',stop);
+  q('cut').addEventListener('click',cutSel);q('pause').addEventListener('click',shortenPauses);
+  q('undo').addEventListener('click',()=>{if(!undo.length)return;restore(undo.pop());changed();});
+  q('clear').addEventListener('click',()=>{undo.push(snap());P.forEach(p=>{p.cuts=[];delete p.gapAfter;});changed();});
+  q('apply').addEventListener('click',async()=>{stop();await onApply();build();draw();});
+  (async function(){
+    try{pcm=[];for(const p of P)pcm.push(await partPCM(p));build();draw();gapsUI();}
+    catch(e){info.className='msg fail';info.textContent='조각 소리를 불러오지 못했습니다 — ComfyUI가 켜져 있는지 확인하세요 ('+e.message+')';}
+  })();
+  return el;
+}
 function renderAudioCard(t,wf,pushLog){
   const s=t.s;
   const el=document.createElement('div');
@@ -2463,10 +2636,12 @@ function renderAudioCard(t,wf,pushLog){
       '<div class="row-actions" style="margin-top:10px;flex-wrap:wrap;">'+
         '<button class="btn small primary" data-a="gen">'+(miss===P.length?'음성 생성':'빠진 조각 생성 + 이어 붙이기')+'</button>'+
         '<button class="btn small" data-a="join">이어 붙이기만</button>'+
+        (P.some(p=>p.ref)?'<button class="btn small" data-a="cutEd">✂ 컷편집</button>':'')+
         '<button class="btn small ghost" data-a="all">전부 다시 생성</button>'+
         '<button class="btn small ghost" data-a="reset">조각 다시 나누기</button>'+
         '<span class="msg" data-a="stat"></span></div>'+
       '<div data-a="player" style="margin-top:9px;"></div>'+
+      '<div data-a="cutbox"></div>'+
     '</div>';
   const stat=el.querySelector('[data-a="stat"]'),player=el.querySelector('[data-a="player"]'),box=el.querySelector('[data-a="parts"]');
   function stale(){s.audioStale=true;persist();}
@@ -2576,6 +2751,19 @@ function renderAudioCard(t,wf,pushLog){
     try{await joinParts(s,(x,q)=>{stat.textContent=q;});persist();stat.className='msg ok';stat.textContent='이어 붙였습니다 · '+fmtDur(s.audioSec);drawPlayer();}
     catch(e){stat.className='msg fail';stat.textContent=e.message;}
     finally{setBusy(false);}
+  });
+  const ce=el.querySelector('[data-a="cutEd"]');
+  if(ce)ce.addEventListener('click',function(){
+    const cb=el.querySelector('[data-a="cutbox"]');
+    if(cb.firstChild){cb.innerHTML='';ce.classList.remove('primary');return;}
+    ce.classList.add('primary');
+    cb.appendChild(audioCutEditor(s,async function(){
+      setBusy(true);stat.className='msg';
+      try{await joinParts(s,(x,q)=>{stat.textContent=q;});persist();stat.className='msg ok';stat.textContent='컷편집을 적용했습니다 · '+fmtDur(s.audioSec);drawPlayer();
+        const sub=el.querySelector('.card-head .sub');if(sub)sub.textContent='조각 '+s.ttsParts.length+'개 · '+fmtDur(s.audioSec);}
+      catch(e){stat.className='msg fail';stat.textContent=e.message;}
+      finally{setBusy(false);}
+    }));
   });
   el.querySelector('[data-a="reset"]').addEventListener('click',function(){
     if(!confirm('조각을 대본에서 새로 나눕니다. 직접 고친 읽기 글은 사라지고, 같은 글의 조각은 음성을 그대로 씁니다.'))return;
@@ -5417,9 +5605,9 @@ function avatarChunks(s,total,maxSec){
   if(Array.isArray(s.ttsParts)&&s.ttsParts.every(p=>p.sec>0)&&!s.audioStale){
     let t=0,last=0;
     s.ttsParts.forEach(function(p,i){
-      const end=t+p.sec,mid=end+(i<s.ttsParts.length-1?TTS_GAP/2:0);
-      if(mid-last>maxSec&&t>last+2){cuts.push(t-TTS_GAP/2);last=t-TTS_GAP/2;}
-      t=end+(i<s.ttsParts.length-1?TTS_GAP:0);
+      const g=partGap(s.ttsParts,i),gb=i>0?partGap(s.ttsParts,i-1):0,end=t+p.sec,mid=end+g/2;
+      if(mid-last>maxSec&&t>last+2){cuts.push(t-gb/2);last=t-gb/2;}
+      t=end+g;
     });
   }
   // 조각 정보가 없거나 여전히 긴 구간은 일정 간격으로
@@ -6874,11 +7062,11 @@ function sceneCuesW(text,start,dur){
 function sceneCuesFor(s,start,dur){
   const P=s.ttsParts;
   if(Array.isArray(P)&&P.length&&!s.ttsFromText&&!s.audioStale&&s.audioOut&&P.every(p=>p.ref&&p.sec>0)){
-    const sum=P.reduce((a,p)=>a+p.sec,0)+TTS_GAP*(P.length-1);
+    const sum=P.reduce((a,p,i)=>a+p.sec+partGap(P,i),0);
     const k=sum>0?dur/sum:1;let t=start;const cues=[];
     P.forEach(function(p,i){
       sceneCuesW(p.disp,t,p.sec*k).forEach(c=>cues.push(c));
-      t+=(p.sec+(i<P.length-1?TTS_GAP:0))*k;
+      t+=(p.sec+partGap(P,i))*k;
     });
     return cues;
   }
