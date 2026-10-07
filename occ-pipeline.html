@@ -1639,7 +1639,7 @@ const SCENE_SYSTEM=[
 '  · 수치 2~3개 비교: "역률 | 95 %", "부하율 | 70 %" → 게이지',
 '  · 흐름·경로·계통: "수전설비 → 변압기 → 배전반 → 부하" 처럼 화살표(→)로 한 줄 → 흐름도',
 '  · 안전 수칙: 짧은 수칙 2~4개 (씬 제목에 주의·금지·위험이 있을 때) → 안전 경고',
- '- visualPrompt는 화면 이미지 생성을 위한 영어 프롬프트 한 문장.',
+ '- visualPrompt는 화면 이미지 생성을 위한 영어 프롬프트 한 문장. 사물·사람·장소·조명·구도만 묘사하고, 간판·포스터·모니터·서류에 적힌 글자나 제목은 넣지 마세요 (그림에 엉뚱한 글자가 생깁니다).',
  '- boardNote는 강사가 전자칠판에 판서하거나 강조할 내용 한 줄.',
  '',
  '설명이나 인사 없이 아래 JSON만 출력하세요.',
@@ -1974,7 +1974,7 @@ function getWorkflows(kind){
 /* 기본 탑재 워크플로우: Z-Image Turbo(텍스트→이미지) · InfiniteTalk 1인용(가상 강사)
    처음 열 때 자동으로 등록됩니다. 지워도 다음에 열면 다시 생기지 않게 지운 기록을 남깁니다. */
 const BUILTIN_WF=[
-  {id:'bi_zimage',name:'Z-Image Turbo · 기본 탑재',kind:'t2i',builtIn:true,
+  {id:'bi_zimage',name:'Z-Image Turbo · 기본 탑재',kind:'t2i',builtIn:true,commercial:true,license:'Apache-2.0',
    map:{prompt:'57:27.text',seed:'57:3.seed',width:'57:13.width',height:'57:13.height'},json:{"9":{"inputs":{"filename_prefix":"occp/zimage","images":["57:8",0]},"class_type":"SaveImage","_meta":{"title":"이미지 저장"}},"57:30":{"inputs":{"clip_name":"qwen_3_4b.safetensors","type":"lumina2","device":"default"},"class_type":"CLIPLoader","_meta":{"title":"CLIP 로드"}},"57:29":{"inputs":{"vae_name":"ae.safetensors"},"class_type":"VAELoader","_meta":{"title":"VAE 로드"}},"57:33":{"inputs":{"conditioning":["57:27",0]},"class_type":"ConditioningZeroOut","_meta":{"title":"조건 (0으로 출력)"}},"57:8":{"inputs":{"samples":["57:3",0],"vae":["57:29",0]},"class_type":"VAEDecode","_meta":{"title":"VAE 디코드"}},"57:28":{"inputs":{"unet_name":"z_image_turbo_bf16.safetensors","weight_dtype":"default"},"class_type":"UNETLoader","_meta":{"title":"확산 모델 로드"}},"57:27":{"inputs":{"text":"clean educational illustration","clip":["57:30",0]},"class_type":"CLIPTextEncode","_meta":{"title":"CLIP 텍스트 인코딩 (프롬프트)"}},"57:13":{"inputs":{"width":1344,"height":768,"batch_size":1},"class_type":"EmptySD3LatentImage","_meta":{"title":"빈 잠재 이미지 (SD3)"}},"57:11":{"inputs":{"shift":3,"sampling":"flow","model":["57:28",0]},"class_type":"ModelSamplingAuraFlow","_meta":{"title":"모델 샘플링 (AuraFlow)"}},"57:3":{"inputs":{"seed":566883989490988,"steps":8,"cfg":1,"sampler_name":"res_multistep","scheduler":"simple","denoise":1,"model":["57:11",0],"positive":["57:27",0],"negative":["57:33",0],"latent_image":["57:13",0]},"class_type":"KSampler","_meta":{"title":"KSampler"}}}},
   {id:'bi_infinitetalk',name:'InfiniteTalk 1인용 · 가상 강사 · 기본 탑재',kind:'avatar',builtIn:true,fps:25,
    map:{audio:'24.audio',image:'32.image',prompt:'188:14.text',seed:'188:193.noise_seed'},json:{"24":{"inputs":{"audio":"occp_probe.wav"},"class_type":"LoadAudio","_meta":{"title":"오디오 로드"}},"32":{"inputs":{"image":"occp_portrait.png"},"class_type":"LoadImage","_meta":{"title":"이미지 로드"}},"188:13":{"inputs":{"unet_name":"Wan2_1-I2V-14B-480p_fp8_e4m3fn_scaled_KJ.safetensors","weight_dtype":"default"},"class_type":"UNETLoader","_meta":{"title":"확산 모델 로드"}},"188:16":{"inputs":{"clip_name":"umt5_xxl_fp8_e4m3fn_scaled.safetensors","type":"wan","device":"default"},"class_type":"CLIPLoader","_meta":{"title":"CLIP 로드"}},"188:29":{"inputs":{"vae_name":"Wan2_1_VAE_bf16.safetensors"},"class_type":"VAELoader","_meta":{"title":"VAE 로드"}},"188:119":{"inputs":{"samples":["188:194",0],"vae":["188:29",0]},"class_type":"VAEDecode","_meta":{"title":"VAE 디코드"}},"188:129":{"inputs":{"mode":"single_speaker","width":448,"height":576,"length":81,"motion_frame_count":9,"audio_scale":1,"model":["188:179",0],"model_patch":["188:112",0],"positive":["188:14",0],"negative":["188:306",0],"vae":["188:29",0],"audio_encoder_output_1":["188:25",0],"start_image":["32",0]},"class_type":"WanInfiniteTalkToVideo","_meta":{"title":"WanInfiniteTalkToVideo"}},"188:14":{"inputs":{"text":"A lecturer is talking to the camera, calm natural head movement, subtle hand gestures, plain green background.","clip":["188:16",0]},"class_type":"CLIPTextEncode","_meta":{"title":"CLIP 텍스트 인코딩 (프롬프트)"}},"188:25":{"inputs":{"audio_encoder":["188:26",0],"audio":["24",0]},"class_type":"AudioEncoderEncode","_meta":{"title":"오디오 인코더 인코딩"}},"188:112":{"inputs":{"name":"wan2.1_infiniteTalk_multi_fp16.safetensors"},"class_type":"ModelPatchLoader","_meta":{"title":"모델 패치 로더"}},"188:26":{"inputs":{"audio_encoder_name":"wav2vec2-chinese-base_fp16.safetensors"},"class_type":"AudioEncoderLoader","_meta":{"title":"오디오 인코더 로더"}},"188:179":{"inputs":{"lora_name":"lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors","strength_model":1,"model":["188:13",0]},"class_type":"LoraLoaderModelOnly","_meta":{"title":"LoRA 로드 (모델 전용)"}},"188:190":{"inputs":{"sampler_name":"euler"},"class_type":"KSamplerSelect","_meta":{"title":"KSampler (선택)"}},"188:191":{"inputs":{"cfg":1,"model":["188:129",0],"positive":["188:129",1],"negative":["188:129",2]},"class_type":"CFGGuider","_meta":{"title":"CFG 가이드"}},"188:192":{"inputs":{"scheduler":"normal","steps":6,"denoise":1,"model":["188:129",0]},"class_type":"BasicScheduler","_meta":{"title":"기본 스케줄러"}},"188:193":{"inputs":{"noise_seed":801592322954930},"class_type":"RandomNoise","_meta":{"title":"무작위 노이즈"}},"188:194":{"inputs":{"noise":["188:193",0],"guider":["188:191",0],"sampler":["188:190",0],"sigmas":["188:192",0],"latent_image":["188:129",3]},"class_type":"SamplerCustomAdvanced","_meta":{"title":"고급 사용자 정의 샘플러"}},"188:306":{"inputs":{"conditioning":["188:14",0]},"class_type":"ConditioningZeroOut","_meta":{"title":"조건 (0으로 출력)"}},"138":{"inputs":{"fps":25,"bit_depth":8,"color_space":"sRGB","codec":"none","images":["188:119",0],"audio":["24",0]},"class_type":"CreateVideo","_meta":{"title":"비디오 생성"}},"162":{"inputs":{"filename_prefix":"occp/avatar","format":"auto","format.codec":"auto","codec":"auto","video":["138",0]},"class_type":"SaveVideo","_meta":{"title":"비디오 저장"}}}}
@@ -1986,7 +1986,8 @@ BUILTIN_WF.push({id:'bi_acestep15',name:'ACE-Step 1.5 Turbo · 배경음악 · �
   json:{"97":{"inputs":{"ckpt_name":"ace_step_1.5_turbo_aio.safetensors"},"class_type":"CheckpointLoaderSimple","_meta":{"title":"체크포인트 로드"}},"94":{"inputs":{"clip":["97",1],"tags":"calm instrumental background music for e-learning, soft piano, warm pads, light strings, no vocals","lyrics":"[Instrumental]","seed":31,"bpm":84,"duration":120,"timesignature":"4","language":"en","keyscale":"C major","generate_audio_codes":true,"cfg_scale":2,"temperature":0.85,"top_p":0.9,"top_k":0,"min_p":0},"class_type":"TextEncodeAceStepAudio1.5","_meta":{"title":"TextEncodeAceStepAudio1.5"}},"78":{"inputs":{"model":["97",0],"shift":3},"class_type":"ModelSamplingAuraFlow","_meta":{"title":"ModelSamplingAuraFlow"}},"98":{"inputs":{"seconds":120,"batch_size":1},"class_type":"EmptyAceStep1.5LatentAudio","_meta":{"title":"Empty Ace Step 1.5 Latent Audio"}},"47":{"inputs":{"conditioning":["94",0]},"class_type":"ConditioningZeroOut","_meta":{"title":"ConditioningZeroOut"}},"3":{"inputs":{"model":["78",0],"positive":["94",0],"negative":["47",0],"latent_image":["98",0],"seed":31,"steps":8,"cfg":1,"sampler_name":"euler","scheduler":"simple","denoise":1},"class_type":"KSampler","_meta":{"title":"KSampler"}},"18":{"inputs":{"samples":["3",0],"vae":["97",2]},"class_type":"VAEDecodeAudio","_meta":{"title":"VAEDecodeAudio"}},"106":{"inputs":{"audio":["18",0],"filename_prefix":"occp/bgm"},"class_type":"SaveAudio","_meta":{"title":"SaveAudio"}}}});
 /* 상업 이용이 가능한 공개 모델만 기본 탑재 (라이선스는 각 모델 카드 기준 · 2026-10 확인)
    배경 지우기 BiRefNet(MIT) · 화질 높이기 SeedVR2(Apache-2.0) · 그림 고치기 FLUX.2 klein 4B(Apache-2.0)
-   이미지→영상 Wan 2.2 TI2V 5B(Apache-2.0) · 성우 Chatterbox 다국어(MIT, 한국어·목소리 견본) */
+   이미지→영상 Wan 2.2 TI2V 5B(Apache-2.0) · 성우 Chatterbox 다국어(MIT, 한국어·목소리 견본)
+   텍스트→이미지 FLUX.2 klein 4B(Apache-2.0) — Z-Image 가 중국어 글자를 자꾸 그릴 때 바꿔 쓰는 대안 (모델 파일은 그림 고치기와 공유) */
 BUILTIN_WF.push(
  {id:'bi_birefnet',name:'BiRefNet · 배경 지우기 · 기본 탑재',kind:'rembg',builtIn:true,commercial:true,license:'MIT',
   models:['background_removal/birefnet.safetensors (Comfy-Org/BiRefNet)'],map:{image:'17.image',prefix:'9.filename_prefix'},json:{"17":{"inputs":{"image":"occp_in.png"},"class_type":"LoadImage","_meta":{"title":"이미지 불러오기"}},"14":{"inputs":{"bg_removal_name":"birefnet.safetensors"},"class_type":"LoadBackgroundRemovalModel","_meta":{"title":"배경 제거 모델"}},"13":{"inputs":{"bg_removal_model":["14",0],"image":["17",0]},"class_type":"RemoveBackground","_meta":{"title":"배경 제거"}},"15":{"inputs":{"mask":["13",0]},"class_type":"InvertMask","_meta":{"title":"마스크 뒤집기"}},"16":{"inputs":{"image":["17",0],"alpha":["15",0]},"class_type":"JoinImageWithAlpha","_meta":{"title":"투명 배경 합치기"}},"9":{"inputs":{"images":["16",0],"filename_prefix":"occp/cutout"},"class_type":"SaveImage","_meta":{"title":"이미지 저장"}}}},
@@ -1996,6 +1997,9 @@ BUILTIN_WF.push(
  {id:'bi_klein_edit',name:'FLUX.2 klein 4B · 그림 고치기 · 기본 탑재',kind:'imgedit',builtIn:true,commercial:true,license:'Apache-2.0',
   models:['diffusion_models/flux-2-klein-4b-fp8.safetensors (black-forest-labs/FLUX.2-klein-4b-fp8)','text_encoders/qwen_3_4b.safetensors','vae/flux2-vae.safetensors'],
   map:{image:'76.image',prompt:'74.text',seed:'73.noise_seed',megapixels:'80.megapixels',prefix:'9.filename_prefix'},json:{"70":{"inputs":{"unet_name":"flux-2-klein-4b-fp8.safetensors","weight_dtype":"default"},"class_type":"UNETLoader","_meta":{"title":"FLUX.2 klein 4B"}},"71":{"inputs":{"clip_name":"qwen_3_4b.safetensors","type":"flux2","device":"default"},"class_type":"CLIPLoader","_meta":{"title":"글 인코더"}},"72":{"inputs":{"vae_name":"flux2-vae.safetensors"},"class_type":"VAELoader","_meta":{"title":"VAE"}},"76":{"inputs":{"image":"occp_in.png"},"class_type":"LoadImage","_meta":{"title":"고칠 이미지"}},"80":{"inputs":{"image":["76",0],"upscale_method":"nearest-exact","megapixels":1,"resolution_steps":1},"class_type":"ImageScaleToTotalPixels","_meta":{"title":"크기 맞춤"}},"99":{"inputs":{"image":["80",0]},"class_type":"GetImageSize","_meta":{"title":"크기"}},"74":{"inputs":{"clip":["71",0],"text":"remove the text from the sign"},"class_type":"CLIPTextEncode","_meta":{"title":"고칠 내용"}},"82":{"inputs":{"conditioning":["74",0]},"class_type":"ConditioningZeroOut","_meta":{"title":"빈 조건"}},"122":{"inputs":{"pixels":["80",0],"vae":["72",0]},"class_type":"VAEEncode","_meta":{"title":"VAE 인코드"}},"123":{"inputs":{"conditioning":["74",0],"latent":["122",0]},"class_type":"ReferenceLatent","_meta":{"title":"참고 이미지"}},"121":{"inputs":{"conditioning":["82",0],"latent":["122",0]},"class_type":"ReferenceLatent","_meta":{"title":"참고 이미지 (부정)"}},"63":{"inputs":{"model":["70",0],"positive":["123",0],"negative":["121",0],"cfg":1},"class_type":"CFGGuider","_meta":{"title":"CFGGuider"}},"61":{"inputs":{"sampler_name":"euler"},"class_type":"KSamplerSelect","_meta":{"title":"샘플러"}},"62":{"inputs":{"steps":4,"width":["99",0],"height":["99",1]},"class_type":"Flux2Scheduler","_meta":{"title":"스케줄러"}},"66":{"inputs":{"width":["99",0],"height":["99",1],"batch_size":1},"class_type":"EmptyFlux2LatentImage","_meta":{"title":"빈 이미지"}},"73":{"inputs":{"noise_seed":43301611940728},"class_type":"RandomNoise","_meta":{"title":"시드"}},"64":{"inputs":{"noise":["73",0],"guider":["63",0],"sampler":["61",0],"sigmas":["62",0],"latent_image":["66",0]},"class_type":"SamplerCustomAdvanced","_meta":{"title":"샘플링"}},"65":{"inputs":{"samples":["64",0],"vae":["72",0]},"class_type":"VAEDecode","_meta":{"title":"VAE 디코드"}},"9":{"inputs":{"images":["65",0],"filename_prefix":"occp/edit"},"class_type":"SaveImage","_meta":{"title":"이미지 저장"}}}},
+ {id:'bi_klein_t2i',name:'FLUX.2 klein 4B · 텍스트→이미지 · 기본 탑재',kind:'t2i',builtIn:true,commercial:true,license:'Apache-2.0',
+  models:['diffusion_models/flux-2-klein-4b-fp8.safetensors (black-forest-labs/FLUX.2-klein-4b-fp8)','text_encoders/qwen_3_4b.safetensors','vae/flux2-vae.safetensors (그림 고치기와 같은 파일)'],
+  map:{prompt:'74.text',seed:'73.noise_seed',width:'66.width',height:'66.height',width2:'62.width',height2:'62.height',prefix:'9.filename_prefix'},json:{"70":{"inputs":{"unet_name":"flux-2-klein-4b-fp8.safetensors","weight_dtype":"default"},"class_type":"UNETLoader","_meta":{"title":"FLUX.2 klein 4B"}},"71":{"inputs":{"clip_name":"qwen_3_4b.safetensors","type":"flux2","device":"default"},"class_type":"CLIPLoader","_meta":{"title":"글 인코더"}},"72":{"inputs":{"vae_name":"flux2-vae.safetensors"},"class_type":"VAELoader","_meta":{"title":"VAE"}},"74":{"inputs":{"text":"clean editorial illustration","clip":["71",0]},"class_type":"CLIPTextEncode","_meta":{"title":"프롬프트"}},"76":{"inputs":{"conditioning":["74",0]},"class_type":"ConditioningZeroOut","_meta":{"title":"빈 조건"}},"63":{"inputs":{"cfg":1,"model":["70",0],"positive":["74",0],"negative":["76",0]},"class_type":"CFGGuider","_meta":{"title":"CFG 가이더"}},"61":{"inputs":{"sampler_name":"euler"},"class_type":"KSamplerSelect","_meta":{"title":"샘플러"}},"62":{"inputs":{"steps":4,"width":1344,"height":768},"class_type":"Flux2Scheduler","_meta":{"title":"스케줄러"}},"66":{"inputs":{"width":1344,"height":768,"batch_size":1},"class_type":"EmptyFlux2LatentImage","_meta":{"title":"빈 잠재 이미지"}},"73":{"inputs":{"noise_seed":432262096973490},"class_type":"RandomNoise","_meta":{"title":"노이즈"}},"64":{"inputs":{"noise":["73",0],"guider":["63",0],"sampler":["61",0],"sigmas":["62",0],"latent_image":["66",0]},"class_type":"SamplerCustomAdvanced","_meta":{"title":"샘플링"}},"65":{"inputs":{"samples":["64",0],"vae":["72",0]},"class_type":"VAEDecode","_meta":{"title":"VAE 디코드"}},"9":{"inputs":{"images":["65",0],"filename_prefix":"occp/klein"},"class_type":"SaveImage","_meta":{"title":"이미지 저장"}}}},
  {id:'bi_wan22_5b',name:'Wan 2.2 TI2V 5B · AI 클립 · 기본 탑재',kind:'i2v',builtIn:true,commercial:true,license:'Apache-2.0',fps:24,frameStep:4,
   models:['diffusion_models/wan2.2_ti2v_5B_fp16.safetensors','text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors','vae/wan2.2_vae.safetensors (Comfy-Org/Wan_2.2_ComfyUI_Repackaged)'],
   map:{image:'56.image',prompt:'6.text',negative:'7.text',seed:'3.seed',frames:'55.length',width:'55.width',height:'55.height'},json:{"37":{"inputs":{"unet_name":"wan2.2_ti2v_5B_fp16.safetensors","weight_dtype":"default"},"class_type":"UNETLoader","_meta":{"title":"Wan 2.2 TI2V 5B"}},"38":{"inputs":{"clip_name":"umt5_xxl_fp8_e4m3fn_scaled.safetensors","type":"wan","device":"default"},"class_type":"CLIPLoader","_meta":{"title":"글 인코더"}},"39":{"inputs":{"vae_name":"wan2.2_vae.safetensors"},"class_type":"VAELoader","_meta":{"title":"VAE"}},"56":{"inputs":{"image":"occp_in.png"},"class_type":"LoadImage","_meta":{"title":"시작 이미지"}},"6":{"inputs":{"clip":["38",0],"text":"slow gentle camera push-in, subtle natural motion"},"class_type":"CLIPTextEncode","_meta":{"title":"긍정 프롬프트"}},"7":{"inputs":{"clip":["38",0],"text":"色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"},"class_type":"CLIPTextEncode","_meta":{"title":"부정 프롬프트"}},"55":{"inputs":{"vae":["39",0],"start_image":["56",0],"width":1280,"height":704,"length":121,"batch_size":1},"class_type":"Wan22ImageToVideoLatent","_meta":{"title":"영상 잠재 공간"}},"48":{"inputs":{"model":["37",0],"shift":8},"class_type":"ModelSamplingSD3","_meta":{"title":"ModelSamplingSD3"}},"3":{"inputs":{"model":["48",0],"positive":["6",0],"negative":["7",0],"latent_image":["55",0],"seed":898471028164125,"steps":20,"cfg":5,"sampler_name":"uni_pc","scheduler":"simple","denoise":1},"class_type":"KSampler","_meta":{"title":"KSampler"}},"8":{"inputs":{"samples":["3",0],"vae":["39",0]},"class_type":"VAEDecode","_meta":{"title":"VAE 디코드"}},"57":{"inputs":{"images":["8",0],"fps":24},"class_type":"CreateVideo","_meta":{"title":"영상 만들기"}},"58":{"inputs":{"video":["57",0],"filename_prefix":"occp/clip","format":"mp4","format.codec":"h264"},"class_type":"SaveVideo","_meta":{"title":"영상 저장"}}}},
@@ -2007,7 +2011,10 @@ function ensureBuiltinWorkflows(){
   if(!Array.isArray(cfg.workflows))cfg.workflows=[];
   const off=cfg.builtinOff||[];let added=false;
   BUILTIN_WF.forEach(function(b){
-    if(off.indexOf(b.id)>=0||cfg.workflows.some(w=>w.id===b.id))return;
+    if(off.indexOf(b.id)>=0)return;
+    const have=cfg.workflows.find(w=>w.id===b.id);
+    // 이미 저장된 기본 탑재본에는 라이선스 같은 안내 정보만 채워 줍니다 (사용자가 고친 매핑·그래프는 그대로)
+    if(have){['license','commercial','models','needs'].forEach(k=>{if(have[k]==null&&b[k]!=null){have[k]=JSON.parse(JSON.stringify(b[k]));added=true;}});return;}
     cfg.workflows.push(JSON.parse(JSON.stringify(b)));added=true;
   });
   if(!cfg.activeT2i&&cfg.workflows.some(w=>w.id==='bi_zimage'))cfg.activeT2i='bi_zimage';
@@ -6493,24 +6500,53 @@ const PRESENTER_TYPES={
   f20:'a bright Korean woman in her late 20s, tied-back hair, wearing a light beige cardigan over a white top',
   m50:'an experienced Korean male electrical engineer in his 50s, wearing a light gray work jacket with a small safety badge, white shirt',
   m30:'a friendly Korean man in his 30s wearing a light blue shirt with rolled sleeves and a navy vest'};
-function presenterPrompt(pv){
-  const who=PRESENTER_TYPES[pv.ptype||'f30']+(pv.pextra?', '+pv.pextra:'');
+function presenterPrompt(pv,extraEn){
+  const ex=extraEn!=null?extraEn:pv.pextra;
+  const who=promptJoin(PRESENTER_TYPES[pv.ptype||'f30'],ex);
   return 'Professional upper-body portrait photo of '+who+', facing the camera directly, calm friendly expression, mouth closed, '+
     'arms relaxed, centered composition, head, shoulders and upper torso visible with space above the head, '+
-    'soft even studio lighting, plain solid chroma key green background, uniform green with no shadows or gradients, sharp focus, photorealistic, high detail';
+    'soft even studio lighting, plain solid chroma key green background, uniform green with no shadows or gradients, sharp focus, photorealistic, high detail. '+
+    'Clothing and badges are plain with no writing, logos or name tags. '+NO_TEXT_CLAUSE;
+}
+/* ── 그림에 엉뚱한 글자(특히 중국어)가 생기지 않게 ──
+   Z-Image Turbo·FLUX.2 klein 같은 증류 모델은 cfg 1 이라 부정 프롬프트가 무시됩니다. 금지는 긍정 프롬프트 안에 문장으로 넣어야 듣습니다.
+   Z-Image 는 중국어·영어 글자 그리기에 강하게 학습되어, 간판·모니터·서류처럼 글자가 있을 법한 곳에 중국어를 채워 넣곤 합니다.
+   한글 설명을 그대로 보내면 글자로 그리려는 경향이 커서 영어로 바꿔 보냅니다. 화면 글자는 도구가 따로 합성합니다. */
+const NO_TEXT_CLAUSE='The image contains no writing of any kind: no Chinese characters, no Korean or English letters, no numbers, no labels, no captions, no logos, no watermark. Any signs, screens, papers, labels and panels in the scene are blank and unmarked.';
+const HANGUL_RE=/[ᄀ-ᇿ㄰-㆏가-힣]/;
+/* 크기 칸이 둘인 워크플로우(FLUX.2: 잠재 이미지 + 스케줄러)도 함께 맞춥니다 */
+function setT2iSize(g,m,w,h){if(m.width)setByPath(g,m.width,w);if(m.height)setByPath(g,m.height,h);if(m.width2)setByPath(g,m.width2,w);if(m.height2)setByPath(g,m.height2,h);}
+function promptJoin(){return Array.prototype.map.call(arguments,x=>String(x||'').trim().replace(/[\s,.;]+$/,'')).filter(Boolean).join(', ');}
+function noTextPrompt(base){return String(base||'').trim().replace(/[\s,.]+$/,'')+'. '+NO_TEXT_CLAUSE;}
+const _visEn=new Map();
+async function englishVisual(src){
+  src=String(src||'').trim();if(!src||!HANGUL_RE.test(src))return src;
+  if(_visEn.has(src))return _visEn.get(src);
+  let out='';
+  if(capCfg('text').provider){
+    try{
+      out=String(await callText('Rewrite the Korean description as ONE English sentence for an image generator: concrete objects, people, place, lighting and composition. '+
+        'Do not quote or mention any words, titles, slogans or writing that would appear in the picture. Output only the sentence.',src,240,true)||'');
+      out=out.replace(/<think>[\s\S]*?<\/think>/g,'').trim().split('\n')[0].replace(/^["'\s]+|["'\s]+$/g,'');
+    }catch(e){out='';}
+  }
+  if(HANGUL_RE.test(out))out='';
+  if(out)_visEn.set(src,out);
+  return out;
 }
 function t2iWorkflow(){const l=getWorkflows('t2i');return l.find(w=>w.id===cfg.activeT2i)||l.find(w=>w.id==='bi_zimage')||l[0];}
 let presenterCancel=false;
 async function generatePresenterCandidates(pv,n,onTick){
   const w=t2iWorkflow();if(!w)throw new Error('텍스트→이미지 워크플로우가 없습니다');
   const m=w.map||{},out=[];
+  const exEn=pv.pextra?((await englishVisual(pv.pextra))||pv.pextra):'';
   for(let i=0;i<n;i++){
     if(presenterCancel)break;
     const g=JSON.parse(JSON.stringify(w.json));
-    setByPath(g,m.prompt,presenterPrompt(pv));
-    if(m.negative)setByPath(g,m.negative,'text, watermark, logo, extra fingers, distorted face, busy background, shadows on background');
+    setByPath(g,m.prompt,presenterPrompt(pv,exEn));
+    if(m.negative)setByPath(g,m.negative,'text, letters, Chinese characters, name tag, watermark, logo, extra fingers, distorted face, busy background, shadows on background');
     if(m.seed)setByPath(g,m.seed,Math.floor(Math.random()*1e15));
-    if(m.width)setByPath(g,m.width,896);if(m.height)setByPath(g,m.height,1152);
+    setT2iSize(g,m,896,1152);
     const r=await runWorkflow(g,function(sec,q){if(onTick)onTick(sec,(i+1)+'/'+n+(q?' · '+q:''));},function(){return presenterCancel;},600);
     const img=r.outputs.find(o=>/\.(png|jpe?g|webp)$/i.test(o.filename));if(img)out.push(img);
   }
@@ -6565,18 +6601,19 @@ const INTRO_STYLES={
   city:{label:'야경 도시 · 전력망',img:'Cinematic aerial night skyline with glowing lines of the power grid connecting buildings, bokeh city lights, blue and orange color grade, atmospheric haze, dark sky area on the left'},
   site:{label:'현장 · 점검 장비',img:'Cinematic close shot of electrical safety inspection tools, insulation tester and safety helmet on a steel workbench, soft window light, shallow depth of field, premium product photography, dark negative space on the left'}};
 const INTRO_CAMS={push:'slow cinematic push-in toward the scene',rise:'slow aerial crane rising upward',dolly:'slow lateral dolly from left to right',orbit:'slow gentle orbit around the subject',drift:'subtle floating drift with slight parallax'};
-const INTRO_NEG='text, letters, words, numbers, captions, watermark, logo, signage, people, faces, distorted, flickering, fast motion, cartoon';
+const INTRO_NEG='text, letters, words, numbers, Chinese characters, captions, watermark, logo, signage, people, faces, distorted, flickering, fast motion, cartoon';
 let introCancel=false;
 async function introKeyCandidates(pc,n,onTick){
   const w=t2iWorkflow();if(!w)throw new Error('텍스트→이미지 워크플로우가 없습니다');
   const st=INTRO_STYLES[pc.introAiStyle||'grid']||INTRO_STYLES.grid,m=w.map||{},out=[];
+  const exEn=pc.introAiExtra?((await englishVisual(pc.introAiExtra))||pc.introAiExtra):'';
   for(let i=0;i<n;i++){
     if(introCancel)break;
     const g=JSON.parse(JSON.stringify(w.json));
-    setByPath(g,m.prompt,st.img+(pc.introAiExtra?', '+pc.introAiExtra:'')+', no text, no letters, no logo');
+    setByPath(g,m.prompt,noTextPrompt(promptJoin(st.img,exEn)));
     if(m.negative)setByPath(g,m.negative,INTRO_NEG);
     if(m.seed)setByPath(g,m.seed,Math.floor(Math.random()*1e15));
-    if(m.width)setByPath(g,m.width,1344);if(m.height)setByPath(g,m.height,768);
+    setT2iSize(g,m,1344,768);
     const r=await runWorkflow(g,(sec,q)=>onTick&&onTick(sec,(i+1)+'/'+n+(q?' · '+q:'')),()=>introCancel,600);
     const img=r.outputs.find(o=>/\.(png|jpe?g|webp)$/i.test(o.filename));if(img)out.push(img);
   }
@@ -10875,24 +10912,32 @@ function renderDesignCard(d){
 }
 
 async function generateSceneImage(s,onTick){
-  const list=getWorkflows('t2i');
-  const w=list.find(x=>x.id===cfg.activeT2i)||list[0];
+  const w=t2iWorkflow();
   if(!w)throw new Error('텍스트→이미지 워크플로우가 없습니다. ⚙ AI 엔진에서 등록하세요.');
   const g=JSON.parse(JSON.stringify(w.json)),m=w.map||{};
   if(!m.prompt)throw new Error('워크플로우의 "긍정 프롬프트" 매핑이 비어 있습니다');
-  setByPath(g,m.prompt,(s.visualPrompt||s.title||'')+', clean educational illustration, soft lighting, no text');
-  if(m.negative)setByPath(g,m.negative,'text, letters, words, watermark, logo, signature, blurry, distorted');
+  // "educational illustration" 은 글자 붙은 도해·포스터를 불러와 뺐습니다
+  const src=s.visualPrompt||s.title||'';
+  let vis=src;
+  if(HANGUL_RE.test(src)){
+    const en=await englishVisual(src);
+    if(en){vis=en;if(!s.visualPrompt)s.visualPrompt=en;}   // 비어 있던 칸은 채워 두어 고칠 수 있게
+    else vis='A picture that shows this idea only through objects, people and place, never as written words: '+src;   // 텍스트 엔진이 없을 때
+  }
+  setByPath(g,m.prompt,noTextPrompt(promptJoin(vis,'clean modern editorial illustration, soft lighting')));
+  if(m.negative)setByPath(g,m.negative,'text, letters, words, Chinese characters, numbers, captions, signage, watermark, logo, signature, blurry, distorted');
   if(m.seed)setByPath(g,m.seed,Math.floor(Math.random()*1e15));
   if(m.seed2)setByPath(g,m.seed2,Math.floor(Math.random()*1e15));
-  if(m.width)setByPath(g,m.width,1344);
-  if(m.height)setByPath(g,m.height,768);
+  setT2iSize(g,m,1344,768);
   const res=await runWorkflow(g,onTick,function(){return false;});
   const img=res.outputs.find(o=>/\.(png|jpe?g|webp)$/i.test(o.filename));
   if(!img)throw new Error('생성된 이미지를 찾지 못했습니다');
   // 입력 폴더로 다시 올려 두면 이 이미지를 AI 클립의 시작 프레임으로도 쓸 수 있습니다
   const blob=await fetchBlob(assetUrl(img,'output'));
   const file=new File([blob],'scene_'+s.id+'_'+Date.now()+'.png',{type:blob.type||'image/png'});
-  s.srcImage=await comfyUpload(file);
+  const up=await comfyUpload(file);
+  if(s.srcImage)s.srcImagePrev=s.srcImage;   // 다시 만들어도 "이전 그림으로" 되돌릴 수 있게
+  s.srcImage=up;
   return s.srcImage;
 }
 
@@ -10911,6 +10956,15 @@ function renderStoryboardStage(){
   }
   if(!sbSel||!all.some(x=>x.s.id===sbSel))sbSel=all[0].s.id;
   const t2i=getWorkflows('t2i');
+  if(t2i.length>1){   // "AI 생성"·가상 강사 얼굴·인트로 표지에 쓰는 그림 모델
+    const cur=t2iWorkflow(),bar=document.createElement('div');bar.className='engbar';
+    bar.innerHTML='<span class="vramdot hot"></span><span class="lbl">그림 AI</span>';
+    const sel=document.createElement('select');sel.className='statusSel';sel.id='t2iSel';
+    sel.title='그림에 중국어 같은 엉뚱한 글자가 자꾸 생기면 FLUX.2 klein 으로 바꿔 보세요';
+    sel.innerHTML=t2i.map(w=>'<option value="'+w.id+'"'+(cur&&cur.id===w.id?' selected':'')+'>'+esc(w.name||'이름 없음')+'</option>').join('');
+    sel.addEventListener('change',function(){cfg.activeT2i=sel.value;persistCfg();});
+    bar.appendChild(sel);main.appendChild(bar);
+  }
 
   // 큰 미리보기
   const pv=document.createElement('div');pv.className='card open';
@@ -10966,6 +11020,7 @@ function renderStoryboardStage(){
           (resolveLayout(u,si)==='hotspot'?'<button class="btn small primary" data-a="hsp" title="장비 사진 위를 항목 순서대로 클릭해 핫스팟 위치를 정합니다">핫스팟 위치</button>':'')+
           (t2i.length?'<button class="btn small" data-a="gen">AI 생성</button>':'')+
           (s.srcImage&&['rembg','upscale','imgedit'].some(k=>getWorkflows(k).length)?'<select data-a="tool" title="AI로 그림 다듬기 (ComfyUI)" style="font-size:12px;padding:4px;max-width:118px;"><option value="">AI 다듬기…</option>'+
+            (getWorkflows('imgedit').length?'<option value="detext">'+IMG_TOOL_LABEL.detext+'</option>':'')+
             ['rembg','upscale','imgedit'].filter(k=>getWorkflows(k).length).map(k=>'<option value="'+k+'">'+IMG_TOOL_LABEL[k]+(k==='imgedit'?'…':'')+'</option>').join('')+
             (s.srcImagePrev?'<option value="undo">이전 그림으로</option>':'')+'</select>':'')+
           (s.srcImage?'<button class="btn small ghost" data-a="clear">지우기</button>':'')+
@@ -11007,9 +11062,10 @@ function renderStoryboardStage(){
         if(busy){st.className='msg';st.textContent='다른 작업이 끝난 뒤에 해 주세요';return;}
         if(k==='undo'){const pv=s.srcImagePrev;s.srcImagePrev=s.srcImage;s.srcImage=pv;persist();renderScriptStageKeepScroll();return;}
         let prompt='';
+        if(k==='detext')prompt=DETEXT_PROMPT;
         if(k==='imgedit'){prompt=window.prompt('어떻게 고칠까요? (영어로 쓰면 더 잘 됩니다)\n예: remove the text on the sign / make the worker wear a yellow hard hat / change the background to a clean factory','');if(!prompt)return;}
         setBusy(true);st.className='msg';st.textContent=IMG_TOOL_LABEL[k]+' 중…';
-        try{const out=await runImageTool(k,s.srcImage,{prompt:prompt,size:1920,megapixels:1},sec=>{st.textContent=IMG_TOOL_LABEL[k]+' 중 '+sec+'초';});
+        try{const out=await runImageTool(k==='detext'?'imgedit':k,s.srcImage,{prompt:prompt,size:1920,megapixels:1},sec=>{st.textContent=IMG_TOOL_LABEL[k]+' 중 '+sec+'초';});
           s.srcImagePrev=s.srcImage;s.srcImage=out;persist();renderScriptStageKeepScroll();}
         catch(err){st.className='msg fail';st.textContent=err.message;}
         finally{setBusy(false);}
@@ -11943,7 +11999,7 @@ function paintSpecialThumb(cv,s,d){
 try{window.__occ={courseDesign,loadThree,loadPost,Studio,ensurePptx,drawHtmlSlide,htmlOpts,HTML_LAYOUTS,LAYOUT_LABEL,chooseLayout,
   useHtmlFor:typeof useHtmlFor==='function'?useHtmlFor:null,keyedFrame,listPaging,timelineParts,meterParts,getWorkflows,allScenes,
   specialTtsScenes,persist,DESIGN_PRESETS,drawHotspotOverlay,hotspotParts,SFX_LIB,sfxBuffer,composeBgm,bgmList,bgmEnvelope,wavBlob,iconSvg,courseMedia:()=>course.media,drawSlide:typeof drawSlide==='function'?drawSlide:null,titleHtml,buildGlbKia,classifySkeleton,makeFlat3D,makeRigMotion,
-  audioEnvelope,lipTrack,lipSyllables,lipSegs,lipPose,mouthKey,mouthXY,drawRig,glbLipMorphs,vrmSkeleton,glbFindMouth,loopXfade,buildMusicGraph,getWorkflows,buildClipGraph,buildTtsGraph,runImageTool};}catch(e){}
+  audioEnvelope,lipTrack,lipSyllables,lipSegs,lipPose,mouthKey,mouthXY,drawRig,glbLipMorphs,vrmSkeleton,glbFindMouth,loopXfade,buildMusicGraph,getWorkflows,buildClipGraph,buildTtsGraph,runImageTool,generateSceneImage,presenterPrompt,englishVisual,noTextPrompt,introKeyCandidates,generatePresenterCandidates};}catch(e){}
 
 /* ══════════ 자가 진단 ══════════
    Node 없이 도구 안에서 바로 점검: 내장 자원 · 배치 등록 · HTML5 그리기 · 3D · PPT · 워크플로우 · ComfyUI/LM Studio 연결 */
@@ -12201,7 +12257,8 @@ const WF_ROLES_IMGTOOL=[
   {k:'prefix',label:'저장 파일명 접두어',titles:[],cls:[],hint:['filename_prefix'],type:'string'}
 ];
 function rolesFor(kind){return kind==='tts'?WF_ROLES_TTS:kind==='avatar'?WF_ROLES_AVATAR:kind==='music'?WF_ROLES_MUSIC:(kind==='rembg'||kind==='upscale'||kind==='imgedit')?WF_ROLES_IMGTOOL:WF_ROLES;}
-const IMG_TOOL_LABEL={rembg:'배경 지우기',upscale:'화질 높이기',imgedit:'글로 고치기'};
+const IMG_TOOL_LABEL={rembg:'배경 지우기',upscale:'화질 높이기',imgedit:'글로 고치기',detext:'글자 지우기'};
+const DETEXT_PROMPT='Remove all text, letters, Chinese characters, numbers, captions and watermarks from the image. Fill those areas with the plain surface behind them. Keep everything else exactly the same.';
 async function runImageTool(kind,ref,o,onTick){
   const w=getWorkflows(kind)[0];if(!w)throw new Error(IMG_TOOL_LABEL[kind]+' 워크플로우가 없습니다 (⚙ AI 엔진 → 워크플로우)');
   const g=JSON.parse(JSON.stringify(w.json)),m=w.map||{};
