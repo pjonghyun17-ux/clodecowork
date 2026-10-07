@@ -8982,6 +8982,15 @@ function imgDimsFromBytes(u){
     const dv = new DataView(u.buffer, u.byteOffset, u.byteLength);
     if(u[0] === 0x89 && u[1] === 0x50) return { w: dv.getUint32(16), h: dv.getUint32(20) };
     if(u[0] === 0x47 && u[1] === 0x49) return { w: dv.getUint16(6, true), h: dv.getUint16(8, true) };
+    if((u[0] === 0x49 && u[1] === 0x49) || (u[0] === 0x4D && u[1] === 0x4D)){     // TIFF: 첫 꼬리표 묶음의 가로(256)·세로(257)
+      const le = u[0] === 0x49; if(dv.getUint16(2, le) !== 42) return null;
+      const off = dv.getUint32(4, le), n = dv.getUint16(off, le); let w = 0, h = 0;
+      for(let i = 0; i < n && off + 14 + i * 12 <= u.length; i++){
+        const e = off + 2 + i * 12, tag = dv.getUint16(e, le), v = dv.getUint16(e + 2, le) === 3 ? dv.getUint16(e + 8, le) : dv.getUint32(e + 8, le);
+        if(tag === 256) w = v; else if(tag === 257) h = v;
+      }
+      return (w && h) ? { w, h } : null;
+    }
     if(u[0] === 0x42 && u[1] === 0x4D) return { w: Math.abs(dv.getInt32(18, true)), h: Math.abs(dv.getInt32(22, true)) };
     if(u[0] === 0xFF && u[1] === 0xD8){
       let o = 2;
@@ -9630,7 +9639,7 @@ const RE_SUBHEAD= /^(\d+)\.(\d+)(?:\.(\d+))?[\s.]+(\S.*)$/;
 const RE_NUMONLY= /^(\d{1,2})$/;
 const RE_APX    = /^부\s*록/;
 const RE_PAGENO = /\s+\d{1,3}$/;
-const IMG_MIME  = { jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', bmp:'image/bmp' };
+const IMG_MIME  = { jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', bmp:'image/bmp', tif:'image/tiff', tiff:'image/tiff' };   // TIFF 는 넣을 때 PNG·JPEG 로 바뀐다
 function hzClean(s){ return String(s||'').replace(/[\u0000\u0001]/g,'').replace(/[ \t]+/g,' ').trim(); }
 function tblTexts(tb){
   const out = [];
@@ -9809,6 +9818,7 @@ async function buildBookParts(items, binData, onProgress){
     if(!d || !mime){ stats.skipped++; return null; }
     let src = 'data:'+mime+';base64,'+bytesToBase64(d.bytes);
     const c = await printQualityDataUrl(src).catch(()=>null);
+    if(!c && isTiffDataUrl(src)){ stats.skipped++; return null; }         // 못 바꾼 TIFF 를 깨진 그림으로 넣지 않는다
     return c || src;
   }
   async function addPics(pics, caption){
@@ -10295,6 +10305,10 @@ async function buildBookParts2(items, binData, onProgress, opt){
     const mime = d ? IMG_MIME[d.ext] : null;
     if(!d || !mime){ stats.skipped++; srcMemo.set(key, null); return null; }
     let src = 'data:'+mime+';base64,'+bytesToBase64(d.bytes);
+    if(isTiffDataUrl(src)){                                                // TIFF 는 먼저 PNG·JPEG 로 (그래야 자르기도 된다)
+      src = await printQualityDataUrl(src).catch(()=>null);
+      if(!src){ stats.skipped++; srcMemo.set(key, null); return null; }
+    }
     if(p.crop){ src = await impCropDataUrl(src, p.crop); stats.cropped++; }
     const c = await printQualityDataUrl(src).catch(()=>null);
     srcMemo.set(key, c || src);
@@ -12414,10 +12428,331 @@ async function comfyUpscale(cfg, dataUrl, onStep){
   if(!outBlob || !outBlob.size) throw new Error('결과 그림이 비어 있습니다.');
   return await blobToDataUrl(outBlob);
 }
+// ==================== TIFF 그림 → PNG·JPEG ====================
+// 크롬·엣지·파이어폭스는 TIFF 를 그리지 못한다(사파리만 된다). 그래서 예전에는 TIFF 를 넣으면 깨진 그림만 보이고
+// 큰 원본(수 MB~수십 MB)이 원고에 그대로 남았다. 넣는 순간 여기서 직접 풀어 PNG(도식)·JPEG(사진)로 바꿔 넣는다.
+// 푸는 일은 작업자(Worker)에서 해 화면이 멈추지 않게 하고, 작업자를 못 쓰는 환경이면 화면 쪽에서 푼다.
+// 받는 것: 압축 없음 · LZW · ZIP(Deflate) · PackBits · JPEG / RGB · CMYK · 흑백 · 팔레트 · YCbCr(JPEG) /
+//          1·2·4·8·16비트 · 투명 · 평면 저장 · 타일 · 수평 예측 · 방향 태그 · 여러 쪽(첫 큰 쪽)
+// 못 받는 것: 팩스(CCITT G3/G4) · 옛 JPEG · JPEG2000 · 부동소수 · BigTIFF — 까닭을 알리고 넣지 않는다
+// ※ tiffDecodeRaw 는 바깥 이름을 하나도 쓰지 않는다 — 함수 글을 그대로 떼어 작업자 안에서 돌리기 때문이다.
+async function tiffDecodeRaw(u8){
+  if(!(u8 instanceof Uint8Array)) u8 = new Uint8Array(u8);
+  if(u8.length < 8) throw new Error('TIFF 파일이 너무 짧습니다');
+  const le = u8[0] === 0x49 && u8[1] === 0x49;
+  if(!le && !(u8[0] === 0x4D && u8[1] === 0x4D)) throw new Error('TIFF 파일이 아닙니다');
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const u16 = o=>dv.getUint16(o, le), u32 = o=>dv.getUint32(o, le);
+  const magic = u16(2);
+  if(magic === 43) throw new Error('BigTIFF(4GB 넘는 TIFF)는 바꾸지 못합니다');
+  if(magic !== 42) throw new Error('TIFF 파일이 아닙니다');
+  // ---- 꼬리표(IFD) 읽기: 쪽마다 하나. 줄인 미리보기 쪽(NewSubfileType 1)이 아닌 첫 쪽을 쓴다
+  const SZ = { 1:1, 2:1, 3:2, 4:4, 5:8, 6:1, 7:1, 8:2, 9:4, 10:8, 11:4, 12:8 };
+  const WANT = { 254:1, 256:1, 257:1, 258:1, 259:1, 262:1, 273:1, 274:1, 277:1, 278:1, 279:1, 284:1, 317:1, 320:1, 322:1, 323:1, 324:1, 325:1, 332:1, 338:1, 339:1, 347:1, 530:1 };
+  const ifds = []; let off = u32(4), guard = 0;
+  while(off && off + 2 <= u8.length && guard++ < 64){
+    const n = u16(off), tags = {};
+    for(let i = 0; i < n; i++){
+      const e = off + 2 + i * 12; if(e + 12 > u8.length) break;
+      const tag = u16(e); if(!WANT[tag]) continue;                  // 색 프로필·포토샵 층 같은 큰 꼬리표는 건너뛴다
+      const type = u16(e + 2), cnt = u32(e + 4), sz = SZ[type] || 1;
+      const at = cnt * sz > 4 ? u32(e + 8) : e + 8;
+      if(at + cnt * sz > u8.length) continue;
+      if(tag === 347){ tags[tag] = u8.subarray(at, at + cnt); continue; }     // JPEG 표: 바이트 그대로
+      const v = new Array(cnt);
+      for(let k = 0; k < cnt; k++){ const p = at + k * sz; v[k] = type === 3 ? u16(p) : (type === 4 || type === 9) ? u32(p) : u8[p]; }
+      tags[tag] = v;
+    }
+    ifds.push(tags);
+    const nx = off + 2 + n * 12; off = nx + 4 <= u8.length ? u32(nx) : 0;
+  }
+  const t = ifds.find(x=>x[256] && !(((x[254] || [0])[0]) & 1)) || ifds.find(x=>x[256]);
+  if(!t || !t[257]) throw new Error('TIFF 에서 그림 크기를 찾지 못했습니다');
+  const one = (k, d)=>t[k] ? t[k][0] : d;
+  const W = one(256), H = one(257);
+  if(!W || !H) throw new Error('TIFF 그림 크기가 0입니다');
+  if(W * H > 60e6) throw new Error(`그림이 너무 큽니다 (${W}×${H}) — 6천만 화소 아래로 줄여 주세요`);
+  const comp = one(259, 1), ph = one(262, 1), spp = one(277, 1), planar = one(284, 1), pred = one(317, 1);
+  const bps = (t[258] || [1])[0], fmt = one(339, 1), orient = one(274, 1);
+  const COMP_NAME = { 2:'팩스(CCITT RLE)', 3:'팩스(CCITT G3)', 4:'팩스(CCITT G4)', 6:'옛 JPEG', 34712:'JPEG2000', 34887:'JPEG XL', 50000:'Zstd', 34925:'LZMA', 34676:'SGI Log', 32946:'Deflate' };
+  if(![1, 5, 7, 8, 32946, 32773].includes(comp)) throw new Error(`${COMP_NAME[comp] || ('압축 ' + comp)} 방식 TIFF 는 바꾸지 못합니다`);
+  if(fmt === 3) throw new Error('부동소수(HDR) TIFF 는 바꾸지 못합니다');
+  if(comp !== 7 && ![1, 2, 4, 8, 16].includes(bps)) throw new Error(`${bps}비트 TIFF 는 바꾸지 못합니다`);
+  const colorN = ph === 2 || ph === 6 ? 3 : ph === 5 ? Math.min(4, spp) : 1;
+  if(![0, 1, 2, 3, 5, 6].includes(ph)) throw new Error(`색 형식(Photometric ${ph}, ${ph === 8 ? 'CIELab' : '기타'}) TIFF 는 바꾸지 못합니다`);
+  if(ph === 6 && comp !== 7){ const ss = t[530] || [2, 2]; if(ss[0] !== 1 || ss[1] !== 1) throw new Error('나눠 저장한 YCbCr TIFF 는 바꾸지 못합니다'); }
+  if(spp < colorN) throw new Error('TIFF 의 색 채널 수가 모자랍니다');
+  const extra = t[338] || [];
+  const alphaIdx = (spp > colorN && (extra[0] === 1 || extra[0] === 2)) ? colorN : -1;
+  const assoc = extra[0] === 1;
+  const cmap = t[320] || null;
+  if(ph === 3 && !cmap) throw new Error('팔레트 TIFF 에 색표가 없습니다');
+
+  // ---- 조각(띠·타일) 배치
+  const tiled = !!(t[322] && t[324]);
+  const tw = tiled ? one(322) : W;
+  const th = tiled ? one(323) : Math.min(H, one(278, H) || H);
+  const offs = tiled ? t[324] : t[273], cnts = tiled ? t[325] : t[279];
+  if(!offs || !offs.length) throw new Error('TIFF 에 그림 자료 위치가 없습니다');
+  const across = Math.ceil(W / tw), down = Math.ceil(H / th), perPlane = across * down;
+  const planes = planar === 2 ? spp : 1, sPer = planar === 2 ? 1 : spp;     // 한 조각에 든 채널 수
+  const rowBytes = Math.ceil(tw * sPer * bps / 8);
+
+  // ---- 압축 풀기
+  function packbits(src, want){
+    const out = new Uint8Array(want); let i = 0, o = 0;
+    while(i < src.length && o < want){
+      const n = (src[i++] << 24) >> 24;
+      if(n >= 0){ for(let k = 0; k <= n && o < want && i < src.length; k++) out[o++] = src[i++]; }
+      else if(n !== -128){ const b = src[i++]; for(let k = 0; k < 1 - n && o < want; k++) out[o++] = b; }
+    }
+    return out;
+  }
+  function lzw(src, want){
+    const out = new Uint8Array(want); let op = 0;
+    const pre = new Int32Array(4096), suf = new Uint8Array(4096), len = new Uint16Array(4096), fst = new Uint8Array(4096);
+    for(let i = 0; i < 256; i++){ pre[i] = -1; suf[i] = i; len[i] = 1; fst[i] = i; }
+    let next = 258, bits = 9, bitPos = 0, old = -1;
+    const nbytes = src.length;
+    const read = ()=>{
+      const b = bitPos >> 3; if(b >= nbytes) return 257;
+      const w = (src[b] << 16) | ((b + 1 < nbytes ? src[b + 1] : 0) << 8) | (b + 2 < nbytes ? src[b + 2] : 0);
+      const v = (w >>> (24 - bits - (bitPos & 7))) & ((1 << bits) - 1);
+      bitPos += bits; return v;
+    };
+    const emit = code=>{
+      const L = len[code]; let c = code;
+      for(let k = L - 1; k >= 0; k--){ if(op + k < want) out[op + k] = suf[c]; c = pre[c]; }
+      op += L;
+    };
+    const add = (p, b)=>{
+      if(next < 4096){ pre[next] = p; suf[next] = b; len[next] = len[p] + 1; fst[next] = fst[p]; next++; }
+      if(next >= (1 << bits) - 1 && bits < 12) bits++;                    // TIFF 의 LZW 는 한 칸 일찍 넓힌다
+    };
+    while(op < want){
+      const code = read();
+      if(code === 257) break;
+      if(code === 256){ next = 258; bits = 9; old = -1; continue; }
+      if(old < 0){ if(code > 255) break; emit(code); old = code; continue; }
+      if(code < next){ emit(code); add(old, fst[code]); }
+      else if(code === next){ add(old, fst[old]); emit(code); }
+      else break;                                                          // 망가진 자료 — 여기까지만
+      old = code;
+    }
+    return out;
+  }
+  async function inflate(src, want){
+    if(typeof DecompressionStream === 'undefined') throw new Error('이 브라우저는 ZIP 압축 TIFF 를 풀지 못합니다');
+    const ds = new DecompressionStream('deflate'), wr = ds.writable.getWriter();
+    (async ()=>{ try{ for(let i = 0; i < src.length; i += 65536){ await wr.ready; await wr.write(src.slice(i, i + 65536)); } await wr.close(); }catch(e){} })();
+    const rd = ds.readable.getReader(), out = new Uint8Array(want); let o = 0;
+    try{ for(;;){ const { done, value } = await rd.read(); if(done) break; out.set(value.subarray(0, Math.max(0, Math.min(value.length, want - o))), o); o += value.length; } }
+    catch(e){ if(!o) throw new Error('ZIP 압축을 풀지 못했습니다'); }
+    return out;
+  }
+  // 수평 예측(Predictor 2): 앞 화소와의 차이로 저장된 값을 되돌린다
+  function unpredict(buf, rows, stride){
+    if(bps === 8){
+      for(let r = 0; r < rows; r++){ const o = r * rowBytes; for(let i = stride; i < tw * stride; i++) buf[o + i] = (buf[o + i] + buf[o + i - stride]) & 255; }
+    } else if(bps === 16){
+      for(let r = 0; r < rows; r++){
+        const o = r * rowBytes;
+        for(let i = stride; i < tw * stride; i++){
+          const p = o + i * 2, q = o + (i - stride) * 2;
+          const a = le ? (buf[p] | buf[p + 1] << 8) : (buf[p] << 8 | buf[p + 1]);
+          const b = le ? (buf[q] | buf[q + 1] << 8) : (buf[q] << 8 | buf[q + 1]);
+          const v = (a + b) & 0xFFFF;
+          if(le){ buf[p] = v & 255; buf[p + 1] = v >> 8; } else { buf[p] = v >> 8; buf[p + 1] = v & 255; }
+        }
+      }
+    } else throw new Error(`${bps}비트에 수평 예측을 쓴 TIFF 는 바꾸지 못합니다`);
+  }
+  async function chunk(i, rows){
+    const o = offs[i] || 0, c = cnts && cnts[i] != null ? cnts[i] : u8.length - o;
+    const src = u8.subarray(Math.min(u8.length, o), Math.min(u8.length, o + c));
+    const want = rows * rowBytes;
+    let buf;
+    if(comp === 1){ buf = new Uint8Array(want); buf.set(src.subarray(0, Math.min(src.length, want))); }
+    else if(comp === 5) buf = lzw(src, want);
+    else if(comp === 32773) buf = packbits(src, want);
+    else buf = await inflate(src, want);
+    if(pred === 2) unpredict(buf, rows, sPer);
+    else if(pred === 3) throw new Error('부동소수 예측을 쓴 TIFF 는 바꾸지 못합니다');
+    return buf;
+  }
+
+  // ---- 화소 → RGBA
+  const out = new Uint8ClampedArray(W * H * 4);
+  const maxV = (1 << bps) - 1;
+  const sample = (buf, ro, si, raw)=>{                                     // 한 줄(ro)에서 si 번째 표본을 0~255 로
+    if(bps === 8) return buf[ro + si];
+    if(bps === 16){ const p = ro + si * 2; const v = le ? buf[p + 1] : buf[p]; return raw ? (le ? (buf[p] | buf[p + 1] << 8) : (buf[p] << 8 | buf[p + 1])) : v; }
+    const bit = si * bps, v = (buf[ro + (bit >> 3)] >> (8 - bps - (bit & 7))) & maxV;
+    return raw ? v : Math.round(v * 255 / maxV);
+  };
+  const ncol = cmap ? cmap.length / 3 : 0;
+  const px = new Array(spp);
+  const put = (idx)=>{
+    const o = idx * 4; let r, g, b, a = 255;
+    if(ph === 2){ r = px[0]; g = px[1]; b = px[2]; }
+    else if(ph === 5){
+      const k = colorN >= 4 ? px[3] : 0;
+      r = (255 - px[0]) * (255 - k) / 255; g = (255 - (colorN > 1 ? px[1] : 0)) * (255 - k) / 255; b = (255 - (colorN > 2 ? px[2] : 0)) * (255 - k) / 255;
+    } else if(ph === 3){ const i = px[0]; r = cmap[i] >> 8; g = cmap[ncol + i] >> 8; b = cmap[2 * ncol + i] >> 8; }
+    else if(ph === 6){ const y = px[0], cb = px[1] - 128, cr = px[2] - 128; r = y + 1.402 * cr; g = y - 0.344136 * cb - 0.714136 * cr; b = y + 1.772 * cb; }
+    else { r = g = b = ph === 0 ? 255 - px[0] : px[0]; }
+    if(alphaIdx >= 0){ a = px[alphaIdx]; if(assoc && a > 0 && a < 255){ r = r * 255 / a; g = g * 255 / a; b = b * 255 / a; } }
+    out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = a;
+  };
+
+  if(comp === 7){
+    // JPEG 조각은 브라우저의 JPEG 해독기를 빌린다 (YCbCr·CMYK JPEG 도 RGB 로 나온다)
+    const mkCanvas = (w, h)=>{
+      if(typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
+      if(typeof document !== 'undefined'){ const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+      throw new Error('NEED_MAIN');
+    };
+    if(typeof createImageBitmap === 'undefined') throw new Error('NEED_MAIN');
+    const tables = t[347];
+    for(let i = 0; i < perPlane; i++){
+      const o = offs[i], c = cnts ? cnts[i] : 0;
+      let jp = u8.subarray(o, o + c);
+      if(tables && tables.length > 4){                                     // 공통 표 + 조각 자료 = 온전한 JPEG
+        const j = new Uint8Array(tables.length - 2 + jp.length - 2);
+        j.set(tables.subarray(0, tables.length - 2), 0); j.set(jp.subarray(2), tables.length - 2); jp = j;
+      }
+      const bmp = await createImageBitmap(new Blob([jp], { type:'image/jpeg' }));
+      const cv = mkCanvas(bmp.width, bmp.height), g = cv.getContext('2d');
+      g.drawImage(bmp, 0, 0);
+      const d = g.getImageData(0, 0, bmp.width, bmp.height).data;
+      const cx = (i % across) * tw, cy = Math.floor(i / across) * th;
+      for(let y = 0; y < bmp.height && cy + y < H; y++){
+        const n = Math.min(bmp.width, W - cx); if(n <= 0) break;
+        out.set(d.subarray(y * bmp.width * 4, (y * bmp.width + n) * 4), ((cy + y) * W + cx) * 4);
+      }
+      if(bmp.close) bmp.close();
+    }
+  } else if(planes === 1){
+    const raw = ph === 3;
+    for(let i = 0; i < perPlane; i++){
+      const cx = (i % across) * tw, cy = Math.floor(i / across) * th;
+      const rows = tiled ? th : Math.min(th, H - cy);
+      const buf = await chunk(i, rows);
+      for(let y = 0; y < rows && cy + y < H; y++){
+        const ro = y * rowBytes, n = Math.min(tw, W - cx);
+        for(let x = 0; x < n; x++){
+          for(let s = 0; s < spp; s++) px[s] = sample(buf, ro, x * spp + s, raw && s === 0);
+          put((cy + y) * W + cx + x);
+        }
+      }
+    }
+  } else {
+    // 평면 저장: 채널마다 따로 모은 뒤 한 화소씩 합친다
+    const S = new Uint8Array(W * H * spp), raw = ph === 3;
+    for(let p = 0; p < planes; p++){
+      for(let i = 0; i < perPlane; i++){
+        const cx = (i % across) * tw, cy = Math.floor(i / across) * th;
+        const rows = tiled ? th : Math.min(th, H - cy);
+        const buf = await chunk(p * perPlane + i, rows);
+        for(let y = 0; y < rows && cy + y < H; y++){
+          const ro = y * rowBytes, n = Math.min(tw, W - cx);
+          for(let x = 0; x < n; x++) S[((cy + y) * W + cx + x) * spp + p] = sample(buf, ro, x, raw && p === 0);
+        }
+      }
+    }
+    for(let i = 0, n = W * H; i < n; i++){ for(let s = 0; s < spp; s++) px[s] = S[i * spp + s]; put(i); }
+  }
+
+  // ---- 도식인가 사진인가: 가장 흔한 한 색이 차지하는 몫 (도식은 흰 바탕이 넓다)
+  const step = Math.max(1, Math.floor(W * H / 200000)), cnt = new Map(); let best = 0, seen = 0;
+  for(let i = 0; i < W * H; i += step){
+    const o = i * 4, k = (out[o] << 16) | (out[o + 1] << 8) | out[o + 2];
+    const v = (cnt.get(k) || 0) + 1; cnt.set(k, v); if(v > best) best = v; seen++;
+  }
+  let hasAlpha = false;
+  if(alphaIdx >= 0) for(let i = 3; i < out.length; i += 4) if(out[i] < 255){ hasAlpha = true; break; }
+  return { w:W, h:H, rgba:out, alpha:hasAlpha, orient, flat: seen ? best / seen : 0, colors: cnt.size,
+           info:{ comp, ph, bps, spp, planar, tiled, pages: ifds.length } };
+}
+
+// 작업자에서 푼다 — 함수 글을 그대로 넣은 작은 스크립트를 Blob 주소로 띄운다 (file:// 로 연 도구에서도 된다)
+let _tiffWorkerUrl = '';
+function tiffWorkerUrl(){
+  if(!_tiffWorkerUrl){
+    const code = 'const tiffDecodeRaw = ' + tiffDecodeRaw.toString() + ';\n' +
+      'self.onmessage = async e => { try { const r = await tiffDecodeRaw(new Uint8Array(e.data)); self.postMessage({ ok:true, r }, [r.rgba.buffer]); }' +
+      ' catch(err) { self.postMessage({ ok:false, msg: String(err && err.message || err) }); } };';
+    _tiffWorkerUrl = URL.createObjectURL(new Blob([code], { type:'text/javascript' }));
+  }
+  return _tiffWorkerUrl;
+}
+function tiffDecodeInWorker(u8){
+  return new Promise((resolve, reject)=>{
+    let w;
+    try{ w = new Worker(tiffWorkerUrl()); }catch(e){ reject(e); return; }
+    const end = ()=>{ try{ w.terminate(); }catch(e){} };
+    w.onmessage = e=>{
+      end();
+      if(e.data && e.data.ok){ e.data.r.via = 'worker'; resolve(e.data.r); }
+      else { const er = new Error((e.data && e.data.msg) || 'TIFF 를 바꾸지 못했습니다'); er.decodeError = true; reject(er); }
+    };
+    w.onerror = e=>{ end(); if(e && e.preventDefault) e.preventDefault(); reject(new Error('작업자를 띄우지 못했습니다')); };
+    const copy = u8.slice();                                                   // 넘기면 비워지므로 사본을 넘긴다
+    w.postMessage(copy.buffer, [copy.buffer]);
+  });
+}
+async function tiffDecode(u8){
+  try{ return await tiffDecodeInWorker(u8); }
+  catch(e){
+    if(e && e.decodeError && !/NEED_MAIN/.test(e.message)) throw e;            // 형식 문제 — 화면 쪽에서 풀어도 같다
+    const r = await tiffDecodeRaw(u8); r.via = 'main'; return r;              // 작업자를 못 쓰는 환경
+  }
+}
+function isTiffBytes(u){ return !!u && u.length > 4 && ((u[0] === 0x49 && u[1] === 0x49 && u[2] === 42 && u[3] === 0) || (u[0] === 0x4D && u[1] === 0x4D && u[2] === 0 && u[3] === 42)); }
+// 이름표가 tiff 이거나, 이름표와 상관없이 TIFF 머리(II*\0 · MM\0*)로 시작하는 data 주소 (한글 문서 속 그림은 이름표를 믿을 수 없다)
+function isTiffDataUrl(s){ return typeof s === 'string' && (/^data:image\/tiff?[;,]/i.test(s) || /^data:[^,]*;base64,(SUkqA|TU0AK)/.test(s)); }
+function dataUrlBytes(s){
+  const i = s.indexOf(','), meta = s.slice(0, i), body = s.slice(i + 1);
+  if(/;base64$/i.test(meta)){ const bin = atob(body); const u = new Uint8Array(bin.length); for(let k = 0; k < bin.length; k++) u[k] = bin.charCodeAt(k); return u; }
+  return new TextEncoder().encode(decodeURIComponent(body));
+}
+// TIFF 바이트 → 넣을 그림 { url, w, h, png, via }. 도식(넓은 같은 색 바탕)·투명 그림은 무손실 PNG, 사진은 JPEG.
+// 긴 변은 인쇄용 화질과 같이 3600px 까지
+async function tiffToDataUrl(u8){
+  const r = await tiffDecode(u8);
+  let cv = document.createElement('canvas'); cv.width = r.w; cv.height = r.h;
+  cv.getContext('2d').putImageData(new ImageData(r.rgba, r.w, r.h), 0, 0);
+  const o = r.orient || 1;
+  if(o > 1 && o <= 8){                                                        // 방향 꼬리표대로 돌리거나 뒤집는다
+    const W = r.w, H = r.h, sw = o >= 5, c2 = document.createElement('canvas');
+    c2.width = sw ? H : W; c2.height = sw ? W : H;
+    const g = c2.getContext('2d');
+    const T = { 2:[-1,0,0,1,W,0], 3:[-1,0,0,-1,W,H], 4:[1,0,0,-1,0,H], 5:[0,1,1,0,0,0], 6:[0,1,-1,0,H,0], 7:[0,-1,-1,0,H,W], 8:[0,-1,1,0,0,W] }[o];
+    g.setTransform(T[0], T[1], T[2], T[3], T[4], T[5]); g.drawImage(cv, 0, 0); cv = c2;
+  }
+  const long = Math.max(cv.width, cv.height), MAX = 3600;
+  if(long > MAX){
+    const k = MAX / long, c3 = document.createElement('canvas');
+    c3.width = Math.max(1, Math.round(cv.width * k)); c3.height = Math.max(1, Math.round(cv.height * k));
+    const g3 = c3.getContext('2d'); g3.imageSmoothingQuality = 'high'; g3.drawImage(cv, 0, 0, c3.width, c3.height); cv = c3;
+  }
+  const png = r.alpha || r.flat >= 0.3 || r.colors <= 256;
+  const blob = await new Promise(res=>cv.toBlob(res, png ? 'image/png' : 'image/jpeg', 0.92));
+  if(!blob) throw new Error('바꾼 그림을 만들지 못했습니다');
+  const url = await blobToDataUrl(blob);
+  return { url, w: cv.width, h: cv.height, png, via: r.via, info: r.info };
+}
+// 그림을 못 열었을 때 그 까닭 (넣는 쪽이 상태 줄에 보여 준다)
+let IMG_FAIL_WHY = '';
+
 // 인쇄용 화질: 원본을 되도록 손대지 않는다. 사진(JPEG)은 그대로, 도식(PNG·BMP·GIF)은 무손실 PNG 로.
 // 한 변 3600px 넘는 것만 줄인다. 실패(null)는 브라우저가 못 그리는 형식(emf/wmf 등)이라는 뜻
 async function printQualityDataUrl(src){
   if(!src || typeof src !== 'string' || !src.startsWith('data:')) return src;
+  if(isTiffDataUrl(src)){                      // 브라우저가 못 그리는 TIFF — 직접 풀어 PNG·JPEG 로
+    try{ return (await tiffToDataUrl(dataUrlBytes(src))).url; }
+    catch(e){ IMG_FAIL_WHY = (e && e.message) || ''; return null; }
+  }
   let img;
   try{ img = await loadImageEl(src); }catch(e){ return null; }
   const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
@@ -12437,6 +12772,10 @@ async function printQualityDataUrl(src){
 // 실패(null) 시 브라우저가 표시할 수 없는 형식(예: hwp의 emf/wmf 벡터 그림)이라는 뜻
 async function compressDataUrl(dataUrl, maxDim, quality){
   if(!dataUrl || typeof dataUrl!=='string' || !dataUrl.startsWith('data:')) return dataUrl;
+  if(isTiffDataUrl(dataUrl)){
+    try{ dataUrl = (await tiffToDataUrl(dataUrlBytes(dataUrl))).url; }
+    catch(e){ IMG_FAIL_WHY = (e && e.message) || ''; return null; }
+  }
   let img;
   try{ img = await loadImageEl(dataUrl); }
   catch(e){ return null; }
@@ -12459,6 +12798,12 @@ async function compressDataUrl(dataUrl, maxDim, quality){
 async function optimizeExistingImages(state){
   let changed = false;
   try{
+    // 고치기 전에 넣어 깨진 채 들어 있는 TIFF 를 지금 PNG·JPEG 로 바꿔 둔다
+    const tiffAt = [[state.meta, 'logo'], [state.meta, 'coverImg']]
+      .concat(((state.meta && state.meta.ads) || []).map(a=>[a, 'src']), (state.parts || []).map(p=>[p, 'illust']));
+    for(const [o, k] of tiffAt){
+      if(o && isTiffDataUrl(o[k])){ const c = await printQualityDataUrl(o[k]).catch(()=>null); if(c){ o[k] = c; changed = true; } }
+    }
     if(state.meta && typeof state.meta.logo==='string' && state.meta.logo.length > 300*1024){
       const c = await compressDataUrl(state.meta.logo, 900, 0.9);
       if(c && c.length < state.meta.logo.length){ state.meta.logo = c; changed = true; }
@@ -12467,6 +12812,10 @@ async function optimizeExistingImages(state){
       for(const chapter of part.chapters||[]){
         for(const section of chapter.sections||[]){
           for(const block of section.blocks||[]){
+            if(block.type==='image' && isTiffDataUrl(block.src)){
+              const c = await printQualityDataUrl(block.src).catch(()=>null);
+              if(c){ const d = await imgNaturalSize(c); block.src = c; block.nw = d.w; block.nh = d.h; changed = true; }
+            }
             // 업스케일한 그림은 일부러 크게 만든 것이므로 도로 줄이지 않습니다
             if(block.type==='image' && typeof block.src==='string'){
               const lim = 8*1024*1024;
@@ -12479,6 +12828,10 @@ async function optimizeExistingImages(state){
             if(block.type==='table'){
               for(const row of block.rows||[]) for(const cell of row||[]){
                 const im = cell && cell.img;
+                if(im && isTiffDataUrl(im.src)){
+                  const c = await printQualityDataUrl(im.src).catch(()=>null);
+                  if(c){ const d = await imgNaturalSize(c); im.src = c; im.nw = d.w; im.nh = d.h; changed = true; }
+                }
                 if(im && typeof im.src==='string'){
                   const lim = 8*1024*1024;
                   const dim = im.upscaled ? 6000 : 3600;
@@ -13666,6 +14019,9 @@ const app = createApp({
     let lastStats = { at:0, id:'', stats:null, bytes:0 };
     // 고친 차례(editSeq)와 저장을 마친 차례(savedSeq) — 둘이 다르면 아직 저장되지 않은 고침이 있다 (탭 닫기 경고에 쓴다)
     let editSeq = 0, savedSeq = 0;
+    // 그림을 못 넣었다는 따위의 안내는 몇 초 붙잡아 둔다 — 곧이어 도는 자동저장의 '자동저장됨'이 덮어 안 보이던 문제
+    let statusHoldUntil = 0;
+    function holdStatus(msg, ms){ saveStatus.value = msg; statusHoldUntil = Date.now() + (ms || 6000); }
     watch(state, ()=>{
       recomputeNumbers();
       if(!bookReady) return;
@@ -13704,7 +14060,7 @@ const app = createApp({
           } else {
             await idbSet(STORAGE_KEY, plain);
           }
-          saveStatus.value = '자동저장됨 ' + nowStr;
+          if(Date.now() >= statusHoldUntil) saveStatus.value = '자동저장됨 ' + nowStr;
           savedSeq = Math.max(savedSeq, seq);
         }catch(e){
           // localStorage 는 교재 목록이 없는 옛 단일 원고일 때만 다음 실행에서 읽힌다.
@@ -13712,7 +14068,7 @@ const app = createApp({
           if(!id){
             try{
               localStorage.setItem(STORAGE_KEY, JSON.stringify(plain));
-              saveStatus.value = '자동저장됨 ' + nowStr;
+              if(Date.now() >= statusHoldUntil) saveStatus.value = '자동저장됨 ' + nowStr;
               savedSeq = Math.max(savedSeq, seq);
               return;
             }catch(e2){}
@@ -16190,9 +16546,10 @@ const app = createApp({
         try{
           const d = await binData(id); const mime = d ? IMG_MIME[d.ext] : null;
           if(!d || !mime) continue;
-          const url = 'data:' + mime + ';base64,' + bytesToBase64(d.bytes);
+          let url = 'data:' + mime + ';base64,' + bytesToBase64(d.bytes);
+          if(isTiffDataUrl(url)){ url = await printQualityDataUrl(url).catch(()=>null); if(!url) continue; }
           const sg = await imgSig(url); if(!sg) continue;
-          origs.push({ url, sg, lossless: d.ext !== 'jpg' && d.ext !== 'jpeg' });
+          origs.push({ url, sg, lossless: !/^data:image\/jpe?g/i.test(url) });
         }catch(e){}
       }
       const res = { total:0, bigger:0, lossless:0, same:0, nomatch:0 };
@@ -16400,15 +16757,17 @@ const app = createApp({
     // 그림 파일(화면 캡처·복사한 그림)을 붙여 넣거나 끌어다 놓으면 그림 요소로
     function imageFilesOf(dt){ return Array.from((dt && dt.files) || []).filter(f=>/^image\//.test(f.type)); }
     async function fileToImageBlock(f){
-      const url = await fileToDataUrl(f);
-      const src = (await printQualityDataUrl(url).catch(()=>null)) || url;
+      const src = await fileToImageSrc(f);
+      if(!src) return null;                                   // 못 여는 그림은 넣지 않는다 (까닭은 상태 줄에)
       const d = await imgNaturalSize(src);
       return { id:uid(), type:'image', src, caption:'', width:80, align:'center', rot:0, nw:d.w, nh:d.h };
     }
     async function insertImageFiles(section, at, files){
-      for(const f of files){ section.blocks.splice(at++, 0, await fileToImageBlock(f)); }
+      let n = 0;
+      for(const f of files){ const b = await fileToImageBlock(f); if(b){ section.blocks.splice(at++, 0, b); n++; } }
       recomputeNumbers();
-      saveStatus.value = `그림 ${files.length}장을 넣었습니다.`;
+      if(n && n < files.length) holdStatus(`그림 ${n}장을 넣었습니다. (${files.length - n}장은 열지 못해 뺐습니다 — PNG·JPEG 로 저장해 넣어 주세요)`, 10000);
+      else if(n && Date.now() >= statusHoldUntil) saveStatus.value = `그림 ${n}장을 넣었습니다.`;
     }
     function onCellPaste(ev){
       const cd = ev.clipboardData; if(!cd) return;
@@ -16419,7 +16778,7 @@ const app = createApp({
         const loc = blkEl ? blockLoc(blkEl.getAttribute('data-bid')) : null;
         const cell = loc ? firstSelCell(loc.block) : null;
         if(!cell){ saveStatus.value = '그림을 넣을 칸을 먼저 클릭하세요.'; return; }
-        fileToImageBlock(imgs[0]).then(b=>{ cell.img = { src:b.src, caption:'', width:92, rot:0, nw:b.nw, nh:b.nh }; });
+        fileToImageBlock(imgs[0]).then(b=>{ if(b) cell.img = { src:b.src, caption:'', width:92, rot:0, nw:b.nw, nh:b.nh }; });
         return;
       }
       const t = cd.getData('text/plain'); if(t == null) return;
@@ -17678,9 +18037,8 @@ const app = createApp({
       const f = e.target.files[0];
       if(!f || !pendingCellImg.value){ e.target.value=''; return; }
       const cell = pendingCellImg.value;
-      fileToDataUrl(f).then(async url=>{
-        const c = await printQualityDataUrl(url).catch(()=>null);
-        const src = c || url;
+      fileToImageSrc(f).then(async src=>{
+        if(!src){ pendingCellImg.value = null; return; }
         const dim = await imgNaturalSize(src);
         cell.img = { src, caption: (cell.img && cell.img.caption) || '', width:(cell.img && cell.img.width) || 92,
                      rot:(cell.img && cell.img.rot) || 0, nw:dim.w, nh:dim.h };
@@ -17882,23 +18240,44 @@ const app = createApp({
         r.readAsDataURL(file);
       });
     }
+    // 그림 파일 → 원고에 넣을 그림 주소.
+    // TIFF 는 백그라운드(작업자)에서 PNG·JPEG 로 바꿔 넣는다 — 브라우저가 TIFF 를 못 그려 깨진 그림과 큰 원본만 남던 문제.
+    // 그래도 못 여는 그림(팩스 압축 TIFF·HEIC·PSD 따위)은 넣지 않고 까닭을 상태 줄에 알린다 (예전엔 깨진 그림으로 들어갔다)
+    // opt.maxDim 을 주면 그 크기로 줄인다(로고·편 그림) — 아니면 인쇄용 화질 규칙대로
+    async function fileToImageSrc(file, opt){
+      opt = opt || {};
+      const name = (file && file.name) || '그림';
+      try{
+        let url;
+        if(isTiffBytes(new Uint8Array(await file.slice(0, 4).arrayBuffer()))){    // 이름(.tif)이 아니라 파일 머리로 가린다
+          saveStatus.value = `'${name}' TIFF 그림을 바꾸는 중…`;
+          const r = await tiffToDataUrl(new Uint8Array(await file.arrayBuffer()));
+          url = r.url;
+          holdStatus(`'${name}' TIFF 그림을 ${r.png ? 'PNG' : 'JPEG'}로 바꿔 넣었습니다 (${r.w}×${r.h})`);
+        } else url = await fileToDataUrl(file);
+        IMG_FAIL_WHY = '';
+        const out = opt.maxDim ? await compressDataUrl(url, opt.maxDim, opt.quality || 0.9).catch(()=>null)
+                               : await printQualityDataUrl(url).catch(()=>null);
+        if(out) return out;
+        holdStatus(`'${name}' 을(를) 넣지 못했습니다 — ${IMG_FAIL_WHY || '이 브라우저가 열 수 없는 그림 형식입니다'}. PNG·JPEG 로 저장해 넣어 주세요`, 10000);
+      }catch(e){
+        holdStatus(`'${name}' 을(를) 넣지 못했습니다 — ${(e && e.message) || e}. PNG·JPEG 로 저장해 넣어 주세요`, 10000);
+      }
+      return null;
+    }
     function onLogoChosen(e){
       const f = e.target.files[0]; if(!f) return;
-      fileToDataUrl(f).then(async url=>{
-        const c = await compressDataUrl(url, 900, 0.9).catch(()=>null);
-        state.meta.logo = c || url;
-      });
+      fileToImageSrc(f, { maxDim:900, quality:0.9 }).then(src=>{ if(src) state.meta.logo = src; });
       e.target.value = '';
     }
     function onFileChosen(e){
       const f = e.target.files[0]; if(!f || !pendingImageBlock.value) return;
       const block = pendingImageBlock.value;
-      fileToDataUrl(f).then(async url=>{
-        const c = await printQualityDataUrl(url).catch(()=>null);
-        block.src = c || url;
-        const d = await imgNaturalSize(block.src);
-        block.nw = d.w; block.nh = d.h;
+      fileToImageSrc(f).then(async src=>{
         pendingImageBlock.value = null;
+        if(!src) return;                                     // 못 여는 그림 — 지금 그림을 그대로 둔다
+        const d = await imgNaturalSize(src);
+        block.src = src; block.nw = d.w; block.nh = d.h;
       });
       e.target.value = '';
     }
@@ -18229,9 +18608,8 @@ const app = createApp({
       const f = e.target.files[0];
       if(!f || !pendingIllustPart.value){ e.target.value=''; return; }
       const part = pendingIllustPart.value;
-      fileToDataUrl(f).then(async url=>{
-        const c = await compressDataUrl(url, 900, 0.9).catch(()=>null);
-        part.illust = c || url;
+      fileToImageSrc(f, { maxDim:900, quality:0.9 }).then(src=>{
+        if(src) part.illust = src;
         pendingIllustPart.value = null;
       });
       e.target.value = '';
@@ -18642,6 +19020,8 @@ const app = createApp({
         recomputeNumbers();
         books.value = await booksList();
         await refreshSnaps();
+        // 처음 열 때는 onMounted 가 한다. 다른 교재로 바꿀 때는 여기서 (깨진 채 들어 있던 TIFF 를 바꿔 둔다)
+        if(!initial) optimizeExistingImages(state).then(ch=>{ if(ch) saveStatus.value = '이 교재의 그림 형식을 정리했습니다'; }).catch(()=>{});
         if(!initial){
           view.value = 'cover';
           bookMsg.value = '';
@@ -19213,8 +19593,12 @@ const app = createApp({
       if(!target){ imgMsg.value = '먼저 왼쪽에서 절을 선택하세요.'; return; }
       imgBusy.value = true;
       try{
-        const src = await imgGet(entry.id);
+        let src = await imgGet(entry.id);
         if(!src) throw new Error('이미지를 찾을 수 없습니다.');
+        if(isTiffDataUrl(src)){                                // 고치기 전에 보관함에 들어간 TIFF
+          src = await printQualityDataUrl(src).catch(()=>null);
+          if(!src) throw new Error(IMG_FAIL_WHY || 'TIFF 그림을 바꾸지 못했습니다');
+        }
         const nb = { id:uid(), type:'image', src, caption: entry.caption || entry.name || '', width:80, align:'center', rot:0 };
         pushBlock(target, nb);
         imgNaturalSize(src).then(d=>{ nb.nw = d.w; nb.nh = d.h; });
@@ -19252,13 +19636,14 @@ const app = createApp({
       if(!files.length){ e.target.value=''; return; }
       imgBusy.value = true;
       try{
+        let n = 0;
         for(const f of files){
-          const url = await fileToDataUrl(f);
-          const c = await printQualityDataUrl(url).catch(()=>null);
-          await imgSave(c || url, { name: f.name.replace(/\.[^.]+$/,''), tags:[], caption:'' });
+          const src = await fileToImageSrc(f);
+          if(!src) continue;
+          await imgSave(src, { name: f.name.replace(/\.[^.]+$/,''), tags:[], caption:'' }); n++;
         }
         await refreshImgLib();
-        imgMsg.value = `그림 ${files.length}개를 보관함에 추가했습니다.`;
+        imgMsg.value = `그림 ${n}개를 보관함에 추가했습니다.` + (n < files.length ? ` (${files.length - n}개는 열지 못해 뺐습니다 — ${saveStatus.value})` : '');
       }catch(err){ imgMsg.value = '추가 실패: ' + err.message; }
       imgBusy.value = false;
       e.target.value = '';
@@ -21576,9 +21961,8 @@ img{max-width:90%;}
       const files = Array.from(e.target.files || []);
       (async ()=>{
         for(const f of files){
-          const url = await fileToDataUrl(f);
-          const c = await printQualityDataUrl(url).catch(()=>null);
-          state.meta.ads.push({ id: uid(), src: c || url, fit:'cover', name: f.name.replace(/\.[^.]+$/, '') });
+          const src = await fileToImageSrc(f);
+          if(src) state.meta.ads.push({ id: uid(), src, fit:'cover', name: f.name.replace(/\.[^.]+$/, '') });
         }
       })();
       e.target.value = '';
@@ -21680,10 +22064,7 @@ img{max-width:90%;}
     });
     function onCoverImgChosen(e){
       const f = e.target.files[0]; if(!f) return;
-      fileToDataUrl(f).then(async url=>{
-        const c = await printQualityDataUrl(url).catch(()=>null);
-        state.meta.coverImg = c || url;
-      });
+      fileToImageSrc(f).then(src=>{ if(src) state.meta.coverImg = src; });
       e.target.value = '';
     }
     // 표지 펼침면만 따로 인쇄(PDF) — 쪽 크기를 펼침면에 맞췄다가 되돌린다
