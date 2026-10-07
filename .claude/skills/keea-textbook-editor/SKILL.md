@@ -54,7 +54,7 @@ python3 .claude/skills/keea-textbook-editor/scripts/patch_apply.py 교재원고�
 S=.claude/skills/keea-textbook-editor/scripts
 python3 $S/split_check.py 교재원고작성기.html          # 문법 (모든 블록 node --check)
 node $S/smoke.js 교재원고작성기.html                   # 열 때 오류 없음 · 주요 전역 · 화면 뜸
-node $S/regression.js 교재원고작성기.html              # 지금까지 고친 버그·TIFF 변환 36가지가 다시 안 나는지
+node $S/regression.js 교재원고작성기.html              # 지금까지 고친 버그·TIFF 변환·ComfyUI 오류 알림 38가지가 다시 안 나는지
 node $S/perf.js 교재원고작성기.html                    # 큰 가짜 원고에서 고침 지연·규칙 검사 시간
 ```
 

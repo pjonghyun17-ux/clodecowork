@@ -1,6 +1,6 @@
 # 이미 밝혀진 함정과 고친 내용
 
-2026-10 검토와 그 뒤 고친 것에서 실제로 재현된 것들이다. 같은 꼴의 코드를 새로 쓸 때 다시 빠지지 않도록 '왜'를 함께 적는다. 1~9·11은 고쳤고 `scripts/regression.js` 가 지킨다. 8번(deep watch)은 아직 그대로다.
+2026-10 검토와 그 뒤 고친 것에서 실제로 재현된 것들이다. 같은 꼴의 코드를 새로 쓸 때 다시 빠지지 않도록 '왜'를 함께 적는다. 1~9·11·12는 고쳤고 `scripts/regression.js` 가 지킨다. 8번(deep watch)은 아직 그대로다.
 
 ## 1. IndexedDB 거래는 abort 도 받아야 한다
 저장 공간이 모자라면(QuotaExceededError) 요청은 성공한 뒤 **커밋 단계에서** 거래가 끝나므로 `error` 가 아니라 `abort` 만 온다. `oncomplete`/`onerror` 만 걸면 Promise 가 영영 안 끝나고, 자동저장이 멈췄는데 화면에는 '자동저장됨'이 남는다.
@@ -59,6 +59,15 @@
 → `tiffDecodeRaw` 는 바깥 이름을 쓰면 안 된다 — `toString()` 으로 떼어 작업자에서 돌린다. 고친 뒤에는 regression.js 의 TIFF 검사
 (assets/tiff 의 libtiff 시험 파일 17종과 기준 그림을 화소마다 견줌)가 `via: 'worker'` 까지 확인한다.
 → CMYK 는 색 프로필 없이 단순 변환한다(도식은 차이가 거의 없고, 사진은 인쇄소 변환과 조금 다를 수 있다).
+
+## 12. 바깥 서비스 오류는 '진짜 원인'을 먼저 보인다
+ComfyUI 는 실패하면 실행 기록(`status.messages`: 시작·캐시·실행 중…·`execution_error`)을 돌려준다. 예전에는 이 기록 전체를
+JSON 으로 이어 붙여 **앞 300자만** 알림에 넣어, 맨 끝의 `exception_message` 가 늘 잘렸다(사용자는 `{"prompt_id":…` 만 봤다).
+→ `comfyErrorText(messages)` 가 `execution_error` 만 골라 '어느 노드(번호)에서 무슨 오류'를 먼저 쓰고, 흔한 원인(그래픽 메모리 부족 ·
+NVIDIA 드라이버/NGX · CUDA 없음 · 크기 범위 · 그림 못 읽음)이면 고칠 방법을 덧붙인다. 도움말은 오류 글만 보고 고른다 —
+트레이스백에는 소스 줄(`batch_size = …`)이 들어 있어 엉뚱한 도움말이 붙는다. 전체 기록은 `console.error` 로 남긴다.
+→ LM Studio·Claude API·구글 드라이브 같은 다른 바깥 호출을 고칠 때도 같은 원칙: 잘라야 하면 원인 쪽을 남긴다.
+→ regression.js 12번이 가짜 ComfyUI 응답(fetch 가로채기)으로 확인한다.
 
 ## 버그 찾기 점검표
 

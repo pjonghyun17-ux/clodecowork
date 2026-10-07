@@ -12346,6 +12346,37 @@ async function comfyPing(cfg){
   return await res.json();
 }
 // 그림 한 장을 ComfyUI에 보내 결과 그림 dataURL을 돌려받습니다.
+// ComfyUI 실행 기록(status.messages) → 사람이 읽을 오류 글.
+// 예전에는 기록 전체(시작·캐시·실행 중…)를 JSON 으로 이어 붙여 앞 300자만 보여 줘서, 맨 끝에 있는
+// 진짜 원인(exception_message)이 늘 잘려 나갔다. 오류 기록만 골라 '어느 노드에서 무슨 오류'를 먼저 보이고,
+// 흔한 원인이면 고칠 방법을 덧붙인다
+function comfyErrorText(messages){
+  const list = Array.isArray(messages) ? messages : [];
+  const err = (list.find(m=>m && m[0] === 'execution_error') || [])[1];
+  const stop = list.find(m=>m && m[0] === 'execution_interrupted');
+  if(!err){
+    if(stop) return 'ComfyUI 에서 작업이 중단되었습니다 (ComfyUI 화면에서 취소했거나 서버가 다시 시작됨).';
+    return 'ComfyUI 실행 중 오류가 났습니다. 자세한 내용은 ComfyUI 창(검은 콘솔 창)의 마지막 줄을 확인해 주세요.';
+  }
+  const node = err.node_type ? `'${err.node_type}' 노드${err.node_id != null ? `(${err.node_id}번)` : ''}` : '워크플로의 한 노드';
+  const what = String(err.exception_message || '').trim() || String((err.traceback || []).slice(-1)[0] || '').trim() || '(오류 내용 없음)';
+  const type = err.exception_type ? String(err.exception_type).split('.').pop() + ': ' : '';
+  const all = (type + what).toLowerCase();     // 트레이스백은 소스 줄(batch_size 따위)까지 들어 있어 엉뚱한 도움말이 붙으므로 오류 글만 본다
+  let hint = '';
+  if(/out of memory|outofmemory|cuda_error_out_of_memory|allocation/.test(all))
+    hint = '그래픽카드 메모리가 모자랍니다. 확대 배율을 낮추거나(예: 2배) 원본 그림을 줄여서, 또는 ComfyUI 를 다시 시작한 뒤 해 보세요.';
+  else if(/nvvfx|ngx|nvvfx_load|driver|video effects|vfx/.test(all))
+    hint = 'NVIDIA 드라이버·영상 효과(NGX) 구성이 맞지 않을 때 나는 오류입니다. NVIDIA 드라이버를 최신으로 올리고 컴퓨터(WSL2 를 쓰면 WSL)를 다시 시작해 보세요. RTX 그래픽카드에서만 됩니다.';
+  else if(/torch not compiled with cuda|no cuda|cuda is not available|no kernel image|cuda driver/.test(all))
+    hint = '이 노드는 CUDA 를 쓰는 NVIDIA RTX 그래픽카드가 있어야 합니다. ComfyUI 가 GPU 판으로 설치됐는지 확인해 주세요.';
+  else if(/resolution|dimension|width|height|too large|exceed|size/.test(all))
+    hint = '그림 크기가 이 노드가 받는 범위를 넘었을 수 있습니다. 확대 배율을 낮추거나 출력 크기를 줄여 보세요.';
+  else if(/no such file|not found|invalid image file|cannot identify image/.test(all))
+    hint = 'ComfyUI 가 올린 그림을 찾거나 읽지 못했습니다. 워크플로의 그림 넣는 노드(LoadImage)를 확인해 주세요.';
+  const short = what.length > 400 ? what.slice(0, 400) + '…' : what;
+  return `ComfyUI 의 ${node}에서 오류가 났습니다.\n${type}${short}` + (hint ? `\n\n→ ${hint}` : '') +
+         '\n\n(전체 기록은 ComfyUI 창과 브라우저 개발자 도구 콘솔에 있습니다)';
+}
 async function comfyUpscale(cfg, dataUrl, onStep){
   const base = comfyBase(cfg.comfyUrl);
   if(!base) throw new Error('ComfyUI 주소가 비어 있습니다.');
@@ -12403,8 +12434,8 @@ async function comfyUpscale(cfg, dataUrl, onStep){
     const rec = h && h[pid];
     if(!rec) continue;
     if(rec.status && rec.status.status_str === 'error'){
-      const msgs = (rec.status.messages||[]).map(m=>JSON.stringify(m[1]||'')).join(' ');
-      throw new Error('ComfyUI 실행 중 오류가 났습니다. ' + msgs.slice(0,300));
+      console.error('ComfyUI 실행 기록', rec.status.messages);
+      throw new Error(comfyErrorText(rec.status.messages));
     }
     const nodeOut = rec.outputs && rec.outputs[outId];
     if(nodeOut && nodeOut.images && nodeOut.images.length){ out = nodeOut.images[0]; break; }

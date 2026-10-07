@@ -1,5 +1,5 @@
 // 회귀 검사: node regression.js <html>
-// 2026-10 검토에서 고친 버그(references/pitfalls.md 1~9)와 TIFF 변환(11)이 다시 깨지지 않는지 본다.
+// 2026-10 검토에서 고친 버그(references/pitfalls.md 1~9)와 TIFF 변환(11)·ComfyUI 오류 알림(12)이 다시 깨지지 않는지 본다.
 // 고치기 전 파일에 돌리면 대부분 FAIL 이 나야 정상이다 — 그래야 이 검사가 무언가를 지킨다.
 // 새 버그를 고치면 같은 꼴로 블록 하나를 더한다: 새 컨텍스트로 열고 → setupState 로 상태를 만들고 → check().
 const { launch, openApp, SS } = require('./_pw');
@@ -241,6 +241,42 @@ if (!FILE) { console.error('쓰는 법: node regression.js <html>'); process.exi
     check('그림 보관함에도 바뀐 그림으로 들어감', /^data:image\/(png|jpeg)/.test(r2.libSrc || ''), r2);
     check('예전에 들어간 TIFF(그림·표 칸·표지)를 열 때 정리', r2.changed && /^data:image\/png.* 40x30$/.test(r2.old1 || '') && /^data:image\/png/.test(r2.old2 || '') && /^data:image\/png/.test(r2.cover || ''), r2);
     check('한글 불러오기가 TIFF 그림을 받음(형식표·크기 읽기)', r2.mime === 'image/tiff' && r2.dims && r2.dims.w === 40 && r2.dims.h === 30, r2);
+    await ctx.close(); }
+
+  // 12. ComfyUI 확대 실패: 진짜 원인(exception_message)이 잘리지 않고 먼저 보이는가 — 가짜 ComfyUI 응답으로
+  { const { p, ctx } = await fresh();
+    let r;
+    try {
+      r = await p.evaluate(async () => {
+        const realFetch = window.fetch;
+        const hist = { p1: { outputs: {}, status: { status_str: 'error', completed: false, messages: [
+          ['execution_start', { prompt_id: 'p1', timestamp: 1791383876210 }],
+          ['execution_cached', { nodes: [], prompt_id: 'p1', timestamp: 1791383876216 }],
+          ['execution_error', { prompt_id: 'p1', node_id: '3', node_type: 'RTXVideoSuperResolution', executed: ['4'],
+            exception_message: 'NvVFX_Load failed: An otherwise unspecified error has occurred (code -1)', exception_type: 'RuntimeError',
+            traceback: ['Traceback (most recent call last):\n', '  File "nodes.py", line 66, in execute\n    batch_size = max(1, MAX_PIXELS // out_pixels)\n', 'RuntimeError: NvVFX_Load failed\n'],
+            current_inputs: {}, current_outputs: {}, timestamp: 1791383876300 }]] } } };
+        const json = o => new Response(JSON.stringify(o), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        window.fetch = async (url, opt) => {
+          url = String(url);
+          if (url.endsWith('/upload/image')) return json({ name: 'keea_x.png', subfolder: 'keea', type: 'input' });
+          if (url.endsWith('/prompt')) return json({ prompt_id: 'p1', number: 1, node_errors: {} });
+          if (url.includes('/history/p1')) return json(hist);
+          return realFetch(url, opt);
+        };
+        const wf = JSON.stringify({ '4': { class_type: 'LoadImage', inputs: { image: 'a.png' } },
+          '3': { class_type: 'RTXVideoSuperResolution', inputs: { images: ['4', 0] } }, '9': { class_type: 'SaveImage', inputs: { images: ['3', 0] } } });
+        const png = (() => { const c = document.createElement('canvas'); c.width = 8; c.height = 8; return c.toDataURL('image/png'); })();
+        let msg = '';
+        try { await comfyUpscale({ comfyUrl: 'http://127.0.0.1:8188', comfyWorkflow: wf }, png); } catch (e) { msg = e.message; }
+        window.fetch = realFetch;
+        const oom = typeof comfyErrorText === 'function' ? comfyErrorText([['execution_error', { node_id: '7', node_type: 'UpscaleModelLoader', exception_type: 'torch.OutOfMemoryError', exception_message: 'CUDA out of memory. Tried to allocate 2.00 GiB' }]]) : '';
+        const stop = typeof comfyErrorText === 'function' ? comfyErrorText([['execution_interrupted', { node_id: '3' }]]) : '';
+        return { msg, oom, stop };
+      });
+    } catch (e) { r = { msg: '', err: e.message.split('\n')[0] }; }
+    check('ComfyUI 오류: 어느 노드인지와 진짜 원인이 보임', /RTXVideoSuperResolution/.test(r.msg) && /3번/.test(r.msg) && /NvVFX_Load failed/.test(r.msg) && !/execution_cached|prompt_id/.test(r.msg), r.msg);
+    check('ComfyUI 오류: 흔한 원인이면 고칠 방법을 붙임', /드라이버/.test(r.msg) && /메모리가 모자랍니다/.test(r.oom || '') && /중단되었습니다/.test(r.stop || ''), r);
     await ctx.close(); }
 
   await b.close();
