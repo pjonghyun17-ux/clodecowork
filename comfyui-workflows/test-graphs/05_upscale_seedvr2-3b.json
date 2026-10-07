@@ -1,0 +1,173 @@
+{
+  "1": {
+    "inputs": {
+      "image": "example.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "이미지 불러오기"
+    }
+  },
+  "9": {
+    "inputs": {
+      "images": [
+        "59",
+        0
+      ],
+      "filename_prefix": "occp/upscale"
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "이미지 저장"
+    }
+  },
+  "48": {
+    "inputs": {
+      "pixels": [
+        "58",
+        0
+      ],
+      "vae": [
+        "51",
+        0
+      ],
+      "tile_size": 512,
+      "overlap": 128,
+      "temporal_size": 4096,
+      "temporal_overlap": 8
+    },
+    "class_type": "VAEEncodeTiled",
+    "_meta": {
+      "title": "VAE 인코드 (타일)"
+    }
+  },
+  "51": {
+    "inputs": {
+      "vae_name": "seedvr2_ema_vae_fp16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "SeedVR2 VAE"
+    }
+  },
+  "52": {
+    "inputs": {
+      "unet_name": "seedvr2_3b_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "SeedVR2 모델"
+    }
+  },
+  "54": {
+    "inputs": {
+      "model": [
+        "52",
+        0
+      ],
+      "positive": [
+        "61",
+        0
+      ],
+      "negative": [
+        "61",
+        1
+      ],
+      "latent_image": [
+        "48",
+        0
+      ],
+      "seed": 42,
+      "steps": 1,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "55": {
+    "inputs": {
+      "samples": [
+        "54",
+        0
+      ],
+      "vae": [
+        "51",
+        0
+      ],
+      "tile_size": 512,
+      "overlap": 128,
+      "temporal_size": 4096,
+      "temporal_overlap": 8
+    },
+    "class_type": "VAEDecodeTiled",
+    "_meta": {
+      "title": "VAE 디코드 (타일)"
+    }
+  },
+  "57": {
+    "inputs": {
+      "input": [
+        "1",
+        0
+      ],
+      "resize_type": "scale longer dimension",
+      "resize_type.longer_size": 1920,
+      "scale_method": "lanczos"
+    },
+    "class_type": "ResizeImageMaskNode",
+    "_meta": {
+      "title": "목표 크기"
+    }
+  },
+  "58": {
+    "inputs": {
+      "resized_images": [
+        "57",
+        0
+      ]
+    },
+    "class_type": "SeedVR2Preprocess",
+    "_meta": {
+      "title": "SeedVR2 전처리"
+    }
+  },
+  "59": {
+    "inputs": {
+      "images": [
+        "55",
+        0
+      ],
+      "original_resized_images": [
+        "57",
+        0
+      ],
+      "color_correction_method": "lab"
+    },
+    "class_type": "SeedVR2PostProcessing",
+    "_meta": {
+      "title": "색 맞춤"
+    }
+  },
+  "61": {
+    "inputs": {
+      "model": [
+        "52",
+        0
+      ],
+      "vae_conditioning": [
+        "48",
+        0
+      ]
+    },
+    "class_type": "SeedVR2Conditioning",
+    "_meta": {
+      "title": "SeedVR2 조건"
+    }
+  }
+}

@@ -1,0 +1,271 @@
+{
+  "9": {
+    "inputs": {
+      "images": [
+        "65",
+        0
+      ],
+      "filename_prefix": "occp/edit"
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "이미지 저장"
+    }
+  },
+  "61": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "샘플러"
+    }
+  },
+  "62": {
+    "inputs": {
+      "steps": 4,
+      "width": [
+        "99",
+        0
+      ],
+      "height": [
+        "99",
+        1
+      ]
+    },
+    "class_type": "Flux2Scheduler",
+    "_meta": {
+      "title": "스케줄러"
+    }
+  },
+  "63": {
+    "inputs": {
+      "model": [
+        "70",
+        0
+      ],
+      "positive": [
+        "123",
+        0
+      ],
+      "negative": [
+        "121",
+        0
+      ],
+      "cfg": 1
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFGGuider"
+    }
+  },
+  "64": {
+    "inputs": {
+      "noise": [
+        "73",
+        0
+      ],
+      "guider": [
+        "63",
+        0
+      ],
+      "sampler": [
+        "61",
+        0
+      ],
+      "sigmas": [
+        "62",
+        0
+      ],
+      "latent_image": [
+        "66",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "샘플링"
+    }
+  },
+  "65": {
+    "inputs": {
+      "samples": [
+        "64",
+        0
+      ],
+      "vae": [
+        "72",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE 디코드"
+    }
+  },
+  "66": {
+    "inputs": {
+      "width": [
+        "99",
+        0
+      ],
+      "height": [
+        "99",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "빈 이미지"
+    }
+  },
+  "70": {
+    "inputs": {
+      "unet_name": "flux-2-klein-4b-fp8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "FLUX.2 klein 4B"
+    }
+  },
+  "71": {
+    "inputs": {
+      "clip_name": "qwen_3_4b.safetensors",
+      "type": "flux2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "글 인코더"
+    }
+  },
+  "72": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "VAE"
+    }
+  },
+  "73": {
+    "inputs": {
+      "noise_seed": 43301611940728
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "시드"
+    }
+  },
+  "74": {
+    "inputs": {
+      "clip": [
+        "71",
+        0
+      ],
+      "text": "remove the text from the sign"
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "고칠 내용"
+    }
+  },
+  "76": {
+    "inputs": {
+      "image": "example.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "고칠 이미지"
+    }
+  },
+  "80": {
+    "inputs": {
+      "image": [
+        "76",
+        0
+      ],
+      "upscale_method": "nearest-exact",
+      "megapixels": 1,
+      "resolution_steps": 1
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "크기 맞춤"
+    }
+  },
+  "82": {
+    "inputs": {
+      "conditioning": [
+        "74",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "빈 조건"
+    }
+  },
+  "99": {
+    "inputs": {
+      "image": [
+        "80",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "크기"
+    }
+  },
+  "121": {
+    "inputs": {
+      "conditioning": [
+        "82",
+        0
+      ],
+      "latent": [
+        "122",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "참고 이미지 (부정)"
+    }
+  },
+  "122": {
+    "inputs": {
+      "pixels": [
+        "80",
+        0
+      ],
+      "vae": [
+        "72",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE 인코드"
+    }
+  },
+  "123": {
+    "inputs": {
+      "conditioning": [
+        "74",
+        0
+      ],
+      "latent": [
+        "122",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "참고 이미지"
+    }
+  }
+}

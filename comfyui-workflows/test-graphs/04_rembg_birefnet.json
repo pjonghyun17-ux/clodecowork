@@ -1,0 +1,77 @@
+{
+  "9": {
+    "inputs": {
+      "images": [
+        "16",
+        0
+      ],
+      "filename_prefix": "occp/cutout"
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "이미지 저장"
+    }
+  },
+  "13": {
+    "inputs": {
+      "bg_removal_model": [
+        "14",
+        0
+      ],
+      "image": [
+        "17",
+        0
+      ]
+    },
+    "class_type": "RemoveBackground",
+    "_meta": {
+      "title": "배경 제거"
+    }
+  },
+  "14": {
+    "inputs": {
+      "bg_removal_name": "birefnet.safetensors"
+    },
+    "class_type": "LoadBackgroundRemovalModel",
+    "_meta": {
+      "title": "배경 제거 모델"
+    }
+  },
+  "15": {
+    "inputs": {
+      "mask": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "InvertMask",
+    "_meta": {
+      "title": "마스크 뒤집기"
+    }
+  },
+  "16": {
+    "inputs": {
+      "image": [
+        "17",
+        0
+      ],
+      "alpha": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "JoinImageWithAlpha",
+    "_meta": {
+      "title": "투명 배경 합치기"
+    }
+  },
+  "17": {
+    "inputs": {
+      "image": "example.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "이미지 불러오기"
+    }
+  }
+}

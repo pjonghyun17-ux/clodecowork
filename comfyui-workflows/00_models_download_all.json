@@ -1,0 +1,807 @@
+{
+ "id": "faed9dc6-bbd5-430f-8c3c-7e4255c15234",
+ "revision": 0,
+ "last_node_id": 13,
+ "last_link_id": 0,
+ "nodes": [
+  {
+   "id": 1,
+   "type": "MarkdownNote",
+   "pos": [
+    -760,
+    0
+   ],
+   "size": [
+    700,
+    900
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [],
+   "title": "읽어 주세요",
+   "properties": {},
+   "widgets_values": [
+    "# OCC 파이프라인 · 모델 한 번에 받기\n\n이 파일을 ComfyUI 에 끌어다 놓으면 **없는 모델 목록**이 뜹니다. 필요한 것만 **다운로드**를 누르세요.\n\n- ComfyUI **데스크톱 앱**: 알맞은 models 폴더에 바로 저장됩니다.\n- **브라우저(포터블·수동 설치)**: 내려받은 파일을 아래 표의 폴더로 옮긴 뒤 ComfyUI 에서 **R**(새로 고침)을 누르세요.\n\n이 그래프는 다운로드용이라 **실행(Run)하지 않아도 됩니다.** 실제로 시험해 보려면 test-graphs 폴더의 파일을 쓰세요.\n\n| 기능 | 폴더 (ComfyUI/models/…) | 파일 |\n|---|---|---|\n| 그림 만들기 · Z-Image Turbo | diffusion_models | z_image_turbo_bf16.safetensors |\n| 그림 만들기 · Z-Image Turbo | vae | ae.safetensors |\n| 공통 · Z-Image / FLUX.2 klein 글 인코더 | text_encoders | qwen_3_4b.safetensors |\n| 그림 만들기·고치기·글자 지우기 · FLUX.2 klein 4B | diffusion_models | flux-2-klein-4b-fp8.safetensors |\n| 그림 만들기·고치기·글자 지우기 · FLUX.2 klein 4B | vae | flux2-vae.safetensors |\n| 배경 지우기 · BiRefNet | background_removal | birefnet.safetensors |\n| 화질 높이기 · SeedVR2 3B | diffusion_models | seedvr2_3b_int8_convrot.safetensors |\n| 화질 높이기 · SeedVR2 3B | vae | seedvr2_ema_vae_fp16.safetensors |\n| AI 클립 · Wan 2.2 TI2V 5B | diffusion_models | wan2.2_ti2v_5B_fp16.safetensors |\n| AI 클립 · Wan 2.2 TI2V 5B | text_encoders | umt5_xxl_fp8_e4m3fn_scaled.safetensors |\n| AI 클립 · Wan 2.2 TI2V 5B | vae | wan2.2_vae.safetensors |\n| 배경음악 · ACE-Step 1.5 Turbo | checkpoints | ace_step_1.5_turbo_aio.safetensors |\n\n**성우 Chatterbox** 는 모델 파일 대신 사용자 노드 **ComfyUI_Fill-ChatterBox** 를 ComfyUI Manager 에서 설치하면 처음 실행할 때 알아서 받습니다.\n\n라이선스: Z-Image Turbo · FLUX.2 klein 4B · SeedVR2 · Wan 2.2 · ACE-Step 1.5 = Apache-2.0, BiRefNet · Chatterbox = MIT (상업 이용 가능)."
+   ],
+   "color": "#432",
+   "bgcolor": "#653"
+  },
+  {
+   "id": 2,
+   "type": "UNETLoader",
+   "pos": [
+    40,
+    50
+   ],
+   "size": [
+    370,
+    110
+   ],
+   "flags": {},
+   "order": 1,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "unet_name",
+     "name": "unet_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "unet_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "MODEL",
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": null
+    }
+   ],
+   "title": "z_image_turbo_bf16.safetensors",
+   "properties": {
+    "Node name for S&R": "UNETLoader",
+    "cnr_id": "comfy-core",
+    "models": [
+     {
+      "name": "z_image_turbo_bf16.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors",
+      "directory": "diffusion_models"
+     }
+    ]
+   },
+   "widgets_values": [
+    "z_image_turbo_bf16.safetensors",
+    "default"
+   ]
+  },
+  {
+   "id": 3,
+   "type": "VAELoader",
+   "pos": [
+    440,
+    50
+   ],
+   "size": [
+    370,
+    110
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "vae_name",
+     "name": "vae_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "vae_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "VAE",
+     "name": "VAE",
+     "type": "VAE",
+     "links": null
+    }
+   ],
+   "title": "ae.safetensors",
+   "properties": {
+    "Node name for S&R": "VAELoader",
+    "cnr_id": "comfy-core",
+    "models": [
+     {
+      "name": "ae.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors",
+      "directory": "vae"
+     }
+    ]
+   },
+   "widgets_values": [
+    "ae.safetensors"
+   ]
+  },
+  {
+   "id": 4,
+   "type": "CLIPLoader",
+   "pos": [
+    40,
+    280
+   ],
+   "size": [
+    370,
+    130
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "clip_name",
+     "name": "clip_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "clip_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "CLIP",
+     "name": "CLIP",
+     "type": "CLIP",
+     "links": null
+    }
+   ],
+   "title": "qwen_3_4b.safetensors",
+   "properties": {
+    "Node name for S&R": "CLIPLoader",
+    "cnr_id": "comfy-core",
+    "models": [
+     {
+      "name": "qwen_3_4b.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
+      "directory": "text_encoders"
+     }
+    ]
+   },
+   "widgets_values": [
+    "qwen_3_4b.safetensors",
+    "lumina2",
+    "default"
+   ]
+  },
+  {
+   "id": 5,
+   "type": "UNETLoader",
+   "pos": [
+    40,
+    510
+   ],
+   "size": [
+    370,
+    110
+   ],
+   "flags": {},
+   "order": 4,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "unet_name",
+     "name": "unet_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "unet_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "MODEL",
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": null
+    }
+   ],
+   "title": "flux-2-klein-4b-fp8.safetensors",
+   "properties": {
+    "Node name for S&R": "UNETLoader",
+    "cnr_id": "comfy-core",
+    "models": [
+     {
+      "name": "flux-2-klein-4b-fp8.safetensors",
+      "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/resolve/main/flux-2-klein-4b-fp8.safetensors",
+      "directory": "diffusion_models"
+     }
+    ]
+   },
+   "widgets_values": [
+    "flux-2-klein-4b-fp8.safetensors",
+    "default"
+   ]
+  },
+  {
+   "id": 6,
+   "type": "VAELoader",
+   "pos": [
+    440,
+    510
+   ],
+   "size": [
+    370,
+    110
+   ],
+   "flags": {},
+   "order": 5,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "vae_name",
+     "name": "vae_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "vae_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "VAE",
+     "name": "VAE",
+     "type": "VAE",
+     "links": null
+    }
+   ],
+   "title": "flux2-vae.safetensors",
+   "properties": {
+    "Node name for S&R": "VAELoader",
+    "cnr_id": "comfy-core",
+    "models": [
+     {
+      "name": "flux2-vae.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
+      "directory": "vae"
+     }
+    ]
+   },
+   "widgets_values": [
+    "flux2-vae.safetensors"
+   ]
+  },
+  {
+   "id": 7,
+   "type": "LoadBackgroundRemovalModel",
+   "pos": [
+    40,
+    740
+   ],
+   "size": [
+    370,
+    110
+   ],
+   "flags": {},
+   "order": 6,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "bg_removal_name",
+     "name": "bg_removal_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "bg_removal_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "bg_model",
+     "name": "bg_model",
+     "type": "BACKGROUND_REMOVAL",
+     "links": null
+    }
+   ],
+   "title": "birefnet.safetensors",
+   "properties": {
+    "Node name for S&R": "LoadBackgroundRemovalModel",
+    "cnr_id": "comfy-core",
+    "models": [
+     {
+      "name": "birefnet.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors",
+      "directory": "background_removal"
+     }
+    ]
+   },
+   "widgets_values": [
+    "birefnet.safetensors"
+   ]
+  },
+  {
+   "id": 8,
+   "type": "UNETLoader",
+   "pos": [
+    40,
+    970
+   ],
+   "size": [
+    370,
+    110
+   ],
+   "flags": {},
+   "order": 7,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "unet_name",
+     "name": "unet_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "unet_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "MODEL",
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": null
+    }
+   ],
+   "title": "seedvr2_3b_int8_convrot.safetensors",
+   "properties": {
+    "Node name for S&R": "UNETLoader",
+    "cnr_id": "comfy-core",
+    "models": [
+     {
+      "name": "seedvr2_3b_int8_convrot.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/diffusion_models/seedvr2_3b_int8_convrot.safetensors",
+      "directory": "diffusion_models"
+     }
+    ]
+   },
+   "widgets_values": [
+    "seedvr2_3b_int8_convrot.safetensors",
+    "default"
+   ]
+  },
+  {
+   "id": 9,
+   "type": "VAELoader",
+   "pos": [
+    440,
+    970
+   ],
+   "size": [
+    370,
+    110
+   ],
+   "flags": {},
+   "order": 8,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "vae_name",
+     "name": "vae_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "vae_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "VAE",
+     "name": "VAE",
+     "type": "VAE",
+     "links": null
+    }
+   ],
+   "title": "seedvr2_ema_vae_fp16.safetensors",
+   "properties": {
+    "Node name for S&R": "VAELoader",
+    "cnr_id": "comfy-core",
+    "models": [
+     {
+      "name": "seedvr2_ema_vae_fp16.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/vae/seedvr2_ema_vae_fp16.safetensors",
+      "directory": "vae"
+     }
+    ]
+   },
+   "widgets_values": [
+    "seedvr2_ema_vae_fp16.safetensors"
+   ]
+  },
+  {
+   "id": 10,
+   "type": "UNETLoader",
+   "pos": [
+    40,
+    1200
+   ],
+   "size": [
+    370,
+    110
+   ],
+   "flags": {},
+   "order": 9,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "unet_name",
+     "name": "unet_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "unet_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "MODEL",
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": null
+    }
+   ],
+   "title": "wan2.2_ti2v_5B_fp16.safetensors",
+   "properties": {
+    "Node name for S&R": "UNETLoader",
+    "cnr_id": "comfy-core",
+    "models": [
+     {
+      "name": "wan2.2_ti2v_5B_fp16.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+      "directory": "diffusion_models"
+     }
+    ]
+   },
+   "widgets_values": [
+    "wan2.2_ti2v_5B_fp16.safetensors",
+    "default"
+   ]
+  },
+  {
+   "id": 11,
+   "type": "CLIPLoader",
+   "pos": [
+    440,
+    1200
+   ],
+   "size": [
+    370,
+    130
+   ],
+   "flags": {},
+   "order": 10,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "clip_name",
+     "name": "clip_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "clip_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "CLIP",
+     "name": "CLIP",
+     "type": "CLIP",
+     "links": null
+    }
+   ],
+   "title": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+   "properties": {
+    "Node name for S&R": "CLIPLoader",
+    "cnr_id": "comfy-core",
+    "models": [
+     {
+      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "directory": "text_encoders"
+     }
+    ]
+   },
+   "widgets_values": [
+    "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+    "wan",
+    "default"
+   ]
+  },
+  {
+   "id": 12,
+   "type": "VAELoader",
+   "pos": [
+    840,
+    1200
+   ],
+   "size": [
+    370,
+    110
+   ],
+   "flags": {},
+   "order": 11,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "vae_name",
+     "name": "vae_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "vae_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "VAE",
+     "name": "VAE",
+     "type": "VAE",
+     "links": null
+    }
+   ],
+   "title": "wan2.2_vae.safetensors",
+   "properties": {
+    "Node name for S&R": "VAELoader",
+    "cnr_id": "comfy-core",
+    "models": [
+     {
+      "name": "wan2.2_vae.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan2.2_vae.safetensors",
+      "directory": "vae"
+     }
+    ]
+   },
+   "widgets_values": [
+    "wan2.2_vae.safetensors"
+   ]
+  },
+  {
+   "id": 13,
+   "type": "CheckpointLoaderSimple",
+   "pos": [
+    40,
+    1430
+   ],
+   "size": [
+    370,
+    110
+   ],
+   "flags": {},
+   "order": 12,
+   "mode": 0,
+   "inputs": [
+    {
+     "localized_name": "ckpt_name",
+     "name": "ckpt_name",
+     "type": "COMBO",
+     "widget": {
+      "name": "ckpt_name"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "MODEL",
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": null
+    },
+    {
+     "localized_name": "CLIP",
+     "name": "CLIP",
+     "type": "CLIP",
+     "links": null
+    },
+    {
+     "localized_name": "VAE",
+     "name": "VAE",
+     "type": "VAE",
+     "links": null
+    }
+   ],
+   "title": "ace_step_1.5_turbo_aio.safetensors",
+   "properties": {
+    "Node name for S&R": "CheckpointLoaderSimple",
+    "cnr_id": "comfy-core",
+    "models": [
+     {
+      "name": "ace_step_1.5_turbo_aio.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/ace_step_1.5_ComfyUI_files/resolve/main/checkpoints/ace_step_1.5_turbo_aio.safetensors",
+      "directory": "checkpoints"
+     }
+    ]
+   },
+   "widgets_values": [
+    "ace_step_1.5_turbo_aio.safetensors"
+   ]
+  }
+ ],
+ "links": [],
+ "groups": [
+  {
+   "id": 1,
+   "title": "그림 만들기 · Z-Image Turbo",
+   "bounding": [
+    20,
+    0,
+    840,
+    200
+   ],
+   "color": "#3f789e",
+   "font_size": 22,
+   "flags": {}
+  },
+  {
+   "id": 2,
+   "title": "공통 · Z-Image / FLUX.2 klein 글 인코더",
+   "bounding": [
+    20,
+    230,
+    440,
+    200
+   ],
+   "color": "#3f789e",
+   "font_size": 22,
+   "flags": {}
+  },
+  {
+   "id": 3,
+   "title": "그림 만들기·고치기·글자 지우기 · FLUX.2 klein 4B",
+   "bounding": [
+    20,
+    460,
+    840,
+    200
+   ],
+   "color": "#3f789e",
+   "font_size": 22,
+   "flags": {}
+  },
+  {
+   "id": 4,
+   "title": "배경 지우기 · BiRefNet",
+   "bounding": [
+    20,
+    690,
+    440,
+    200
+   ],
+   "color": "#3f789e",
+   "font_size": 22,
+   "flags": {}
+  },
+  {
+   "id": 5,
+   "title": "화질 높이기 · SeedVR2 3B",
+   "bounding": [
+    20,
+    920,
+    840,
+    200
+   ],
+   "color": "#3f789e",
+   "font_size": 22,
+   "flags": {}
+  },
+  {
+   "id": 6,
+   "title": "AI 클립 · Wan 2.2 TI2V 5B",
+   "bounding": [
+    20,
+    1150,
+    1240,
+    200
+   ],
+   "color": "#3f789e",
+   "font_size": 22,
+   "flags": {}
+  },
+  {
+   "id": 7,
+   "title": "배경음악 · ACE-Step 1.5 Turbo",
+   "bounding": [
+    20,
+    1380,
+    440,
+    200
+   ],
+   "color": "#3f789e",
+   "font_size": 22,
+   "flags": {}
+  }
+ ],
+ "config": {},
+ "extra": {
+  "ds": {
+   "scale": 0.7,
+   "offset": [
+    800,
+    80
+   ]
+  }
+ },
+ "version": 0.4,
+ "models": [
+  {
+   "name": "z_image_turbo_bf16.safetensors",
+   "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors",
+   "directory": "diffusion_models"
+  },
+  {
+   "name": "ae.safetensors",
+   "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors",
+   "directory": "vae"
+  },
+  {
+   "name": "qwen_3_4b.safetensors",
+   "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
+   "directory": "text_encoders"
+  },
+  {
+   "name": "flux-2-klein-4b-fp8.safetensors",
+   "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/resolve/main/flux-2-klein-4b-fp8.safetensors",
+   "directory": "diffusion_models"
+  },
+  {
+   "name": "flux2-vae.safetensors",
+   "url": "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
+   "directory": "vae"
+  },
+  {
+   "name": "birefnet.safetensors",
+   "url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors",
+   "directory": "background_removal"
+  },
+  {
+   "name": "seedvr2_3b_int8_convrot.safetensors",
+   "url": "https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/diffusion_models/seedvr2_3b_int8_convrot.safetensors",
+   "directory": "diffusion_models"
+  },
+  {
+   "name": "seedvr2_ema_vae_fp16.safetensors",
+   "url": "https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/vae/seedvr2_ema_vae_fp16.safetensors",
+   "directory": "vae"
+  },
+  {
+   "name": "wan2.2_ti2v_5B_fp16.safetensors",
+   "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+   "directory": "diffusion_models"
+  },
+  {
+   "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+   "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+   "directory": "text_encoders"
+  },
+  {
+   "name": "wan2.2_vae.safetensors",
+   "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan2.2_vae.safetensors",
+   "directory": "vae"
+  },
+  {
+   "name": "ace_step_1.5_turbo_aio.safetensors",
+   "url": "https://huggingface.co/Comfy-Org/ace_step_1.5_ComfyUI_files/resolve/main/checkpoints/ace_step_1.5_turbo_aio.safetensors",
+   "directory": "checkpoints"
+  }
+ ]
+}
