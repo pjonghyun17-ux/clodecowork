@@ -1979,6 +1979,11 @@ const BUILTIN_WF=[
   {id:'bi_infinitetalk',name:'InfiniteTalk 1인용 · 가상 강사 · 기본 탑재',kind:'avatar',builtIn:true,fps:25,
    map:{audio:'24.audio',image:'32.image',prompt:'188:14.text',seed:'188:193.noise_seed'},json:{"24":{"inputs":{"audio":"occp_probe.wav"},"class_type":"LoadAudio","_meta":{"title":"오디오 로드"}},"32":{"inputs":{"image":"occp_portrait.png"},"class_type":"LoadImage","_meta":{"title":"이미지 로드"}},"188:13":{"inputs":{"unet_name":"Wan2_1-I2V-14B-480p_fp8_e4m3fn_scaled_KJ.safetensors","weight_dtype":"default"},"class_type":"UNETLoader","_meta":{"title":"확산 모델 로드"}},"188:16":{"inputs":{"clip_name":"umt5_xxl_fp8_e4m3fn_scaled.safetensors","type":"wan","device":"default"},"class_type":"CLIPLoader","_meta":{"title":"CLIP 로드"}},"188:29":{"inputs":{"vae_name":"Wan2_1_VAE_bf16.safetensors"},"class_type":"VAELoader","_meta":{"title":"VAE 로드"}},"188:119":{"inputs":{"samples":["188:194",0],"vae":["188:29",0]},"class_type":"VAEDecode","_meta":{"title":"VAE 디코드"}},"188:129":{"inputs":{"mode":"single_speaker","width":448,"height":576,"length":81,"motion_frame_count":9,"audio_scale":1,"model":["188:179",0],"model_patch":["188:112",0],"positive":["188:14",0],"negative":["188:306",0],"vae":["188:29",0],"audio_encoder_output_1":["188:25",0],"start_image":["32",0]},"class_type":"WanInfiniteTalkToVideo","_meta":{"title":"WanInfiniteTalkToVideo"}},"188:14":{"inputs":{"text":"A lecturer is talking to the camera, calm natural head movement, subtle hand gestures, plain green background.","clip":["188:16",0]},"class_type":"CLIPTextEncode","_meta":{"title":"CLIP 텍스트 인코딩 (프롬프트)"}},"188:25":{"inputs":{"audio_encoder":["188:26",0],"audio":["24",0]},"class_type":"AudioEncoderEncode","_meta":{"title":"오디오 인코더 인코딩"}},"188:112":{"inputs":{"name":"wan2.1_infiniteTalk_multi_fp16.safetensors"},"class_type":"ModelPatchLoader","_meta":{"title":"모델 패치 로더"}},"188:26":{"inputs":{"audio_encoder_name":"wav2vec2-chinese-base_fp16.safetensors"},"class_type":"AudioEncoderLoader","_meta":{"title":"오디오 인코더 로더"}},"188:179":{"inputs":{"lora_name":"lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors","strength_model":1,"model":["188:13",0]},"class_type":"LoraLoaderModelOnly","_meta":{"title":"LoRA 로드 (모델 전용)"}},"188:190":{"inputs":{"sampler_name":"euler"},"class_type":"KSamplerSelect","_meta":{"title":"KSampler (선택)"}},"188:191":{"inputs":{"cfg":1,"model":["188:129",0],"positive":["188:129",1],"negative":["188:129",2]},"class_type":"CFGGuider","_meta":{"title":"CFG 가이드"}},"188:192":{"inputs":{"scheduler":"normal","steps":6,"denoise":1,"model":["188:129",0]},"class_type":"BasicScheduler","_meta":{"title":"기본 스케줄러"}},"188:193":{"inputs":{"noise_seed":801592322954930},"class_type":"RandomNoise","_meta":{"title":"무작위 노이즈"}},"188:194":{"inputs":{"noise":["188:193",0],"guider":["188:191",0],"sampler":["188:190",0],"sigmas":["188:192",0],"latent_image":["188:129",3]},"class_type":"SamplerCustomAdvanced","_meta":{"title":"고급 사용자 정의 샘플러"}},"188:306":{"inputs":{"conditioning":["188:14",0]},"class_type":"ConditioningZeroOut","_meta":{"title":"조건 (0으로 출력)"}},"138":{"inputs":{"fps":25,"bit_depth":8,"color_space":"sRGB","codec":"none","images":["188:119",0],"audio":["24",0]},"class_type":"CreateVideo","_meta":{"title":"비디오 생성"}},"162":{"inputs":{"filename_prefix":"occp/avatar","format":"auto","format.codec":"auto","codec":"auto","video":["138",0]},"class_type":"SaveVideo","_meta":{"title":"비디오 저장"}}}}
 ];
+/* 배경음악: ACE-Step 1.5 Turbo (Apache 2.0 · 상업 이용 가능). ComfyUI 공식 예제 그래프를 API 형식으로 옮긴 것.
+   모델 파일: models/checkpoints/ace_step_1.5_turbo_aio.safetensors (Hugging Face: Comfy-Org/ace_step_1.5_ComfyUI_files) */
+BUILTIN_WF.push({id:'bi_acestep15',name:'ACE-Step 1.5 Turbo · 배경음악 · 기본 탑재',kind:'music',builtIn:true,commercial:true,license:'Apache-2.0',
+  map:{tags:'94.tags',lyrics:'94.lyrics',seed:'94.seed',seed2:'3.seed',duration:'94.duration',duration2:'98.seconds',bpm:'94.bpm',key:'94.keyscale',language:'94.language',prefix:'106.filename_prefix'},
+  json:{"97":{"inputs":{"ckpt_name":"ace_step_1.5_turbo_aio.safetensors"},"class_type":"CheckpointLoaderSimple","_meta":{"title":"체크포인트 로드"}},"94":{"inputs":{"clip":["97",1],"tags":"calm instrumental background music for e-learning, soft piano, warm pads, light strings, no vocals","lyrics":"[Instrumental]","seed":31,"bpm":84,"duration":120,"timesignature":"4","language":"en","keyscale":"C major","generate_audio_codes":true,"cfg_scale":2,"temperature":0.85,"top_p":0.9,"top_k":0,"min_p":0},"class_type":"TextEncodeAceStepAudio1.5","_meta":{"title":"TextEncodeAceStepAudio1.5"}},"78":{"inputs":{"model":["97",0],"shift":3},"class_type":"ModelSamplingAuraFlow","_meta":{"title":"ModelSamplingAuraFlow"}},"98":{"inputs":{"seconds":120,"batch_size":1},"class_type":"EmptyAceStep1.5LatentAudio","_meta":{"title":"Empty Ace Step 1.5 Latent Audio"}},"47":{"inputs":{"conditioning":["94",0]},"class_type":"ConditioningZeroOut","_meta":{"title":"ConditioningZeroOut"}},"3":{"inputs":{"model":["78",0],"positive":["94",0],"negative":["47",0],"latent_image":["98",0],"seed":31,"steps":8,"cfg":1,"sampler_name":"euler","scheduler":"simple","denoise":1},"class_type":"KSampler","_meta":{"title":"KSampler"}},"18":{"inputs":{"samples":["3",0],"vae":["97",2]},"class_type":"VAEDecodeAudio","_meta":{"title":"VAEDecodeAudio"}},"106":{"inputs":{"audio":["18",0],"filename_prefix":"occp/bgm"},"class_type":"SaveAudio","_meta":{"title":"SaveAudio"}}}});
 function ensureBuiltinWorkflows(){
   if(!Array.isArray(cfg.workflows))cfg.workflows=[];
   const off=cfg.builtinOff||[];let added=false;
@@ -8544,6 +8549,28 @@ function sfxEvents(tl,d){
 /* 나레이션 구간 (덕킹용) */
 function speechSpans(tl){return tl.segs.filter(sg=>sg.kind==='scene'&&sg.audioDur>0).map(sg=>[sg.audioStart,sg.audioStart+sg.audioDur]);}
 /* 배경음악 이득 곡선: 기본 v, 말하는 동안 v×duck (0.25초 경사) */
+/* 배경음악 반복: 앞뒤 무음을 덜고, 곡 끝 몇 초와 다음 처음을 같은 힘으로 겹쳐 total 초 길이로 */
+function bgmSeamless(m){return !!(m&&m.gen&&m.gen!=='ai');}           // 도구가 작곡한 곡은 이음매 없이 만들어짐
+function loopXfade(ctx,buf,total){
+  const sr=buf.sampleRate,ch=buf.numberOfChannels,d0=buf.getChannelData(0);
+  let a=0,b=d0.length;const th=0.003;
+  while(a<b&&Math.abs(d0[a])<th)a++;while(b>a&&Math.abs(d0[b-1])<th)b--;   // 앞뒤 무음
+  const L=b-a;if(L<sr*4)return buf;
+  const need=Math.ceil(total*sr);if(L>=need)return buf;
+  const xf=Math.min(Math.round(sr*3),Math.floor(L/4)),step=L-xf,out=ctx.createBuffer(ch,need,sr);
+  for(let c=0;c<ch;c++){
+    const s=buf.getChannelData(c).subarray(a,b),o=out.getChannelData(c);
+    for(let st=0;st<need;st+=step){
+      for(let i=0;i<L&&st+i<need;i++){
+        let g=1;
+        if(st>0&&i<xf)g=Math.sin(i/xf*Math.PI/2);                          // 들어오는 곡: 서서히
+        if(i>=L-xf&&st+step<need)g*=Math.cos((i-(L-xf))/xf*Math.PI/2);       // 나가는 곡: 서서히
+        o[st+i]+=s[i]*g;
+      }
+    }
+  }
+  return out;
+}
 function bgmEnvelope(g,spans,total,v,duck,from,to){
   const st=from||0,en=to||total,dv=v*duck;
   g.gain.setValueAtTime(0,st);g.gain.linearRampToValueAtTime(v,st+1.0);
@@ -9110,7 +9137,8 @@ async function renderFileVideo(file,cb){
     if(inc.bgm&&course.media.bgm){
       try{
         const bb=await Store.getBlob(course.media.bgm.id);
-        const bgm=bb?await mix.decodeAudioData(await bb.arrayBuffer()):null;
+        let bgm=bb?await mix.decodeAudioData(await bb.arrayBuffer()):null;
+        if(bgm&&!bgmSeamless(course.media.bgm))bgm=loopXfade(mix,bgm,total+2);   // AI 곡·올린 파일: 끝과 처음을 겹쳐 이음
         const v=pc.bgmVol,duck=pc.bgmDuck!=null?+pc.bgmDuck:0.3;
         if(bgm&&pc.bgmScope==='all'){
           const g=mix.createGain();bgmEnvelope(g,speechSpans(tl),total,v,duck,0,total);
@@ -11491,13 +11519,85 @@ function libSfx(body){
       all.filter(x=>x.cat===c).map(x=>'<button class="btn small" data-sfx="'+x.id+'">▶ '+esc(x.name)+'</button>').join('')+'</div></div>').join('');
   body.querySelectorAll('[data-sfx]').forEach(b=>b.onclick=async function(){const buf=await sfxBuffer(b.dataset.sfx);if(buf)libPlay(buf);});
 }
+/* 강의 배경음악용 스타일 (모델에는 영어 태그가 잘 먹음) */
+const AI_BGM_PRESETS=[
+  {k:'piano',name:'잔잔한 피아노',bpm:76,key:'C major',tags:'calm instrumental background music for e-learning narration, soft solo piano, gentle pads, minimal, warm, steady, unobtrusive, no vocals'},
+  {k:'corp',name:'밝은 기업 소개',bpm:100,key:'G major',tags:'uplifting corporate background music, light acoustic guitar, soft plucks, airy synth pads, subtle percussion, positive, clean, instrumental, no vocals'},
+  {k:'ambient',name:'앰비언트',bpm:70,key:'D major',tags:'ambient instrumental background, warm evolving pads, soft textures, slow and spacious, calm focus, no drums, no vocals'},
+  {k:'acoustic',name:'어쿠스틱',bpm:92,key:'D major',tags:'light acoustic instrumental, fingerpicked guitar, soft shaker, warm bass, friendly and relaxed, no vocals'},
+  {k:'lofi',name:'차분한 로파이',bpm:80,key:'A minor',tags:'chill lofi instrumental, mellow electric piano, soft drums, vinyl texture, relaxed study mood, no vocals'},
+  {k:'tense',name:'안전 경고 (긴장감)',bpm:88,key:'E minor',tags:'cinematic instrumental underscore, low strings, steady pulse, subtle tension, serious safety awareness tone, no vocals, not loud'},
+  {k:'jingle',name:'인트로 징글 (짧게)',bpm:110,key:'C major',sec:15,tags:'short bright intro jingle, piano and bells, uplifting logo sting, clean ending, instrumental, no vocals'}
+];
+function aiBgmHtml(){
+  const W=getWorkflows('music'),last=course.media.aiBgm||{};
+  if(!W.length)return '<div class="card" style="padding:10px 12px;margin-bottom:12px;"><b>AI로 배경음악 만들기</b><p class="note" style="margin:4px 0 0;">⚙ AI 엔진 → 워크플로우에 "음악 생성" 워크플로우가 없습니다 (ACE-Step 1.5 기본 탑재를 지웠다면 다시 등록하세요).</p></div>';
+  const pr=AI_BGM_PRESETS.find(x=>x.k===last.preset)||AI_BGM_PRESETS[0];
+  return '<div class="card" style="padding:10px 12px;margin-bottom:12px;"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><b>AI로 배경음악 만들기</b><span class="note" style="margin:0;">ComfyUI 음악 모델 · 과정당 한두 곡이면 충분합니다</span></div>'+
+    '<div class="form-grid" style="margin-top:8px;">'+
+      '<div class="field"><label>워크플로우</label><select data-ai="wf">'+W.map(w=>'<option value="'+w.id+'"'+(last.wf===w.id?' selected':'')+'>'+esc(w.name)+(w.commercial===false?' (비상업 전용)':w.commercial==null?' (조건 확인 필요)':'')+'</option>').join('')+'</select></div>'+
+      '<div class="field"><label>분위기</label><select data-ai="preset">'+AI_BGM_PRESETS.map(x=>'<option value="'+x.k+'"'+(x.k===pr.k?' selected':'')+'>'+esc(x.name)+'</option>').join('')+'</select></div>'+
+      '<div class="field"><label>길이</label><select data-ai="sec">'+[15,30,60,120,180,300].map(v=>'<option value="'+v+'"'+((last.sec||pr.sec||120)===v?' selected':'')+'>'+(v<60?v+'초':(v/60)+'분')+'</option>').join('')+'</select></div>'+
+      '<div class="field"><label>빠르기 (BPM)</label><input type="number" data-ai="bpm" min="50" max="180" value="'+(last.bpm||pr.bpm)+'"></div>'+
+      '<div class="field wide"><label>스타일 (영어 태그가 잘 듣습니다)</label><textarea data-ai="tags" rows="2">'+esc(last.tags||pr.tags)+'</textarea></div>'+
+      '<div class="field"><label>보컬</label><select data-ai="voc"><option value="0">없음 (연주곡 · 권장)</option><option value="1"'+(last.voc?' selected':'')+'>가사 넣기 (테마곡)</option></select></div>'+
+      '<div class="field"><label>시드</label><div class="lorarow" style="margin:0;"><input type="number" data-ai="seed" value="'+(last.seed!=null?last.seed:31)+'" style="flex:1;"><button class="btn small ghost" data-ai="dice" title="다른 곡">🎲</button></div></div>'+
+      '<div class="field wide" data-ai="lyrW"'+(last.voc?'':' hidden')+'><label>가사 ([Verse] [Chorus] 같은 표시)</label><textarea data-ai="lyr" rows="4">'+esc(last.lyr||'[Verse]\n\n[Chorus]\n')+'</textarea></div>'+
+    '</div>'+
+    '<div class="row-actions" style="margin-top:8px;"><button class="btn small primary" data-ai="go">만들기</button><button class="btn small" data-ai="play" disabled>▶ 들어 보기</button>'+
+      '<button class="btn small" data-ai="use" disabled>이 과정 배경음악으로</button><span class="msg" data-ai="msg"></span></div>'+
+    '<p class="note" style="margin:6px 0 0;">나레이션 밑에 깔리므로 연주곡을 권합니다. 렌더할 때 곡 끝과 처음을 부드럽게 겹쳐 이어 붙이고, 나레이션 동안은 자동으로 줄입니다.</p></div>';
+}
+function bindAiBgm(body,redraw){
+  const q=k=>body.querySelector('[data-ai="'+k+'"]');if(!q('go'))return;
+  let res=null,src=null;
+  const conf=()=>({wf:q('wf').value,preset:q('preset').value,sec:+q('sec').value,bpm:+q('bpm').value||90,tags:q('tags').value.trim(),voc:q('voc').value==='1',
+    seed:parseInt(q('seed').value,10)||0,lyr:q('lyr').value});
+  const keep=()=>{course.media.aiBgm=conf();persist();};
+  q('preset').onchange=function(){const p=AI_BGM_PRESETS.find(x=>x.k===q('preset').value);if(!p)return;q('tags').value=p.tags;q('bpm').value=p.bpm;if(p.sec)q('sec').value=String(p.sec);keep();};
+  q('voc').onchange=function(){q('lyrW').hidden=q('voc').value!=='1';keep();};
+  q('dice').onclick=function(){q('seed').value=Math.floor(Math.random()*1e9);keep();};
+  ['sec','bpm','tags','seed','lyr','wf'].forEach(k=>q(k).addEventListener('change',keep));
+  const m=q('msg');
+  q('go').onclick=async function(){
+    const c=conf(),w=getWorkflows('music').find(x=>x.id===c.wf);if(!w)return;
+    if(w.commercial===false&&!confirm('이 워크플로우는 비상업 라이선스 모델입니다.\n교육비를 받는 과정의 배경음악으로 쓰면 라이선스 위반이 될 수 있습니다.\n시험용으로만 만들까요?'))return;
+    keep();if(src){try{src.stop();}catch(e){}src=null;}
+    q('go').disabled=true;m.className='msg';m.textContent='ComfyUI에 보내는 중…';
+    try{
+      const p=AI_BGM_PRESETS.find(x=>x.k===c.preset)||{};
+      const g=buildMusicGraph(w,{tags:c.tags||p.tags,lyrics:c.voc?c.lyr:'[Instrumental]',seed:c.seed,seconds:c.sec,bpm:c.bpm,key:p.key,language:'ko'});
+      const r=await runWorkflow(g,(sec,qs)=>{m.textContent='곡 만드는 중 · '+sec+'초'+(qs?' · '+qs:'');},null,Math.max(600,c.sec*12));
+      const au=r.outputs.find(o=>/\.(mp3|wav|flac|ogg|m4a|opus)$/i.test(o.filename))||r.outputs[0];
+      if(!au)throw new Error('음악 파일을 찾지 못했습니다 (워크플로우 끝에 오디오 저장 노드가 있는지 확인)');
+      const blob=await (await fetch(comfyViewUrl(au))).blob();
+      const buf=await new OfflineAudioContext(2,1,48000).decodeAudioData(await blob.arrayBuffer());
+      res={blob:blob,buf:buf,w:w,c:c,name:(p.name||'AI 곡')+' · 시드 '+c.seed,file:au.filename};
+      m.className='msg ok';m.textContent='완성 · '+fmtDur(buf.duration)+' ('+r.sec+'초 걸림)';q('play').disabled=false;q('use').disabled=false;
+    }catch(e){m.className='msg fail';m.textContent=e.message;}
+    finally{q('go').disabled=false;}
+  };
+  q('play').onclick=function(){if(!res)return;if(src){try{src.stop();}catch(e){}src=null;q('play').textContent='▶ 들어 보기';return;}
+    src=libPlay(res.buf);q('play').textContent='■ 멈춤';if(src)src.onended=()=>{src=null;q('play').textContent='▶ 들어 보기';};};
+  q('use').onclick=async function(){
+    if(!res)return;
+    if(res.w.commercial===false&&!confirm('비상업 라이선스 모델로 만든 곡입니다. 정말 이 과정의 배경음악으로 쓸까요?'))return;
+    const id=uid('m');await Store.putBlob(id,res.blob);
+    if(course.media.bgm)Store.delBlob(course.media.bgm.id).catch(()=>{});
+    course.media.bgm={id:id,name:res.name,type:res.blob.type||'audio/flac',size:res.blob.size,gen:'ai',model:res.w.name,license:res.w.license||'',commercial:res.w.commercial,
+      tags:res.c.tags,seed:res.c.seed,sec:+res.buf.duration.toFixed(1)};
+    persist();if(src){try{src.stop();}catch(e){}src=null;}
+    m.className='msg ok';m.textContent='이 과정의 배경음악으로 저장했습니다';setTimeout(redraw,600);
+  };
+}
 function libBgm(body){
   const L=bgmList(),cur=course.media&&course.media.bgm;
-  body.innerHTML='<p class="note" style="margin:0 0 8px;">도구가 직접 작곡하는 배경음악 '+L.length+'곡 (스타일 '+Object.keys(BGM_STYLES).length+' × 조성 '+Object.keys(BGM_KEYS).length+' × 빠르기 2). 고르면 약 1분짜리 곡을 만들어 이 과정의 배경음악으로 저장하고, 렌더 때 이어 붙여 반복합니다.'+
+  body.innerHTML=aiBgmHtml()+'<p class="note" style="margin:0 0 8px;">도구가 직접 작곡하는 배경음악 '+L.length+'곡 (스타일 '+Object.keys(BGM_STYLES).length+' × 조성 '+Object.keys(BGM_KEYS).length+' × 빠르기 2). 고르면 약 1분짜리 곡을 만들어 이 과정의 배경음악으로 저장하고, 렌더 때 이어 붙여 반복합니다.'+
     (cur?' <b>현재: '+esc(cur.name||'')+'</b>':'')+'</p>'+
     Object.keys(BGM_STYLES).map(st=>'<div style="margin-bottom:10px;"><div style="font-size:13px;font-weight:600;margin-bottom:5px;">'+BGM_STYLES[st].name+'</div><div style="display:flex;flex-wrap:wrap;gap:6px;">'+
       L.filter(x=>x.style===st).map(x=>'<span style="display:inline-flex;gap:2px;"><button class="btn small" data-pv="'+x.id+'">▶ '+x.key+(BGM_STYLES[st].minor?'단조':'장조')+(x.tempo?' 빠르게':'')+'</button><button class="btn small primary" data-use="'+x.id+'" title="이 과정 배경음악으로">쓰기</button></span>').join('')+'</div></div>').join('')+
     '<p class="note">미리듣기는 앞 20초 정도를 들려줍니다. 직접 가진 음악 파일은 도입·마무리 카드에서 올릴 수 있습니다.</p><div class="msg" data-m></div>';
+  bindAiBgm(body,()=>libBgm(body));
   let playing=null;const m=body.querySelector('[data-m]');
   body.querySelectorAll('[data-pv]').forEach(b=>b.onclick=async function(){if(playing){try{playing.stop();}catch(e){}playing=null;}m.textContent='만드는 중…';
     const buf=await composeBgm(b.dataset.pv,8);m.textContent='';playing=libPlay(buf);});
@@ -11789,7 +11889,7 @@ function paintSpecialThumb(cv,s,d){
 try{window.__occ={courseDesign,loadThree,loadPost,Studio,ensurePptx,drawHtmlSlide,htmlOpts,HTML_LAYOUTS,LAYOUT_LABEL,chooseLayout,
   useHtmlFor:typeof useHtmlFor==='function'?useHtmlFor:null,keyedFrame,listPaging,timelineParts,meterParts,getWorkflows,allScenes,
   specialTtsScenes,persist,DESIGN_PRESETS,drawHotspotOverlay,hotspotParts,SFX_LIB,sfxBuffer,composeBgm,bgmList,bgmEnvelope,wavBlob,iconSvg,courseMedia:()=>course.media,drawSlide:typeof drawSlide==='function'?drawSlide:null,titleHtml,buildGlbKia,classifySkeleton,makeFlat3D,makeRigMotion,
-  audioEnvelope,lipTrack,lipSyllables,lipSegs,lipPose,mouthKey,mouthXY,drawRig,glbLipMorphs,vrmSkeleton,glbFindMouth};}catch(e){}
+  audioEnvelope,lipTrack,lipSyllables,lipSegs,lipPose,mouthKey,mouthXY,drawRig,glbLipMorphs,vrmSkeleton,glbFindMouth,loopXfade,buildMusicGraph,getWorkflows};}catch(e){}
 
 /* ══════════ 자가 진단 ══════════
    Node 없이 도구 안에서 바로 점검: 내장 자원 · 배치 등록 · HTML5 그리기 · 3D · PPT · 워크플로우 · ComfyUI/LM Studio 연결 */
@@ -12022,7 +12122,43 @@ const WF_ROLES_AVATAR=[
    hint:['positive_prompt','prompt','text'],type:'string',shape:s=>String(s.raw).length>15&&String(s.raw).indexOf(' ')>0},
   {k:'seed',label:'시드',titles:['seed','시드'],cls:[],hint:['seed','noise_seed'],type:'number',shape:s=>s.raw>1000}
 ];
-function rolesFor(kind){return kind==='tts'?WF_ROLES_TTS:kind==='avatar'?WF_ROLES_AVATAR:WF_ROLES;}
+/* 음악 생성 (배경음악·징글): ACE-Step · YuE2 · 그 밖의 곡 생성 워크플로우 */
+const WF_ROLES_MUSIC=[
+  {k:'tags',label:'곡 스타일 (태그)',titles:['style','tags','스타일','text (style)'],cls:['TextEncodeAceStepAudio1.5','TextEncodeAceStepAudio','PrimitiveStringMultiline'],
+   hint:['tags','style'],type:'string',shape:s=>String(s.raw).length>8&&!/^\s*\[/.test(String(s.raw))},
+  {k:'lyrics',label:'가사 ([Instrumental] = 연주곡)',titles:['lyrics','가사','text (lyrics)'],cls:['TextEncodeAceStepAudio1.5','TextEncodeAceStepAudio','PrimitiveStringMultiline'],
+   hint:['lyrics'],type:'string',shape:s=>/\[(verse|chorus|intro|instrumental|inst)/i.test(String(s.raw))},
+  {k:'seed',label:'시드',titles:['seed','시드','int (seed)'],cls:[],hint:['seed','noise_seed'],type:'number'},
+  {k:'seed2',label:'보조 시드 (같이 바꿈)',titles:[],cls:['KSampler'],hint:['seed','noise_seed'],type:'number'},
+  {k:'duration',label:'길이 (초)',titles:['duration','song duration','길이','float (duration)'],cls:[],hint:['duration','max_duration','seconds'],type:'number'},
+  {k:'duration2',label:'보조 길이 (초 · 같이 바꿈)',titles:[],cls:['EmptyAceStep1.5LatentAudio','EmptyAceStepLatentAudio'],hint:['seconds'],type:'number'},
+  {k:'bpm',label:'빠르기 (BPM)',titles:[],cls:[],hint:['bpm'],type:'number'},
+  {k:'key',label:'조성',titles:[],cls:[],hint:['keyscale','key'],type:'string',shape:s=>/^[A-G][#b]? (major|minor)$/.test(String(s.raw))},
+  {k:'language',label:'가사 언어',titles:[],cls:[],hint:['language'],type:'string',shape:s=>/^[a-z]{2,3}$/.test(String(s.raw))},
+  {k:'prefix',label:'저장 파일명 접두어',titles:[],cls:[],hint:['filename_prefix'],type:'string'}
+];
+function rolesFor(kind){return kind==='tts'?WF_ROLES_TTS:kind==='avatar'?WF_ROLES_AVATAR:kind==='music'?WF_ROLES_MUSIC:WF_ROLES;}
+/* 음악 모델 라이선스 어림: 비상업(CC BY-NC) 모델은 교육비를 받는 과정에 쓰면 안 됨 */
+function musicLicenseGuess(json){
+  const s=JSON.stringify(json||{});
+  if(/YuE|yue2|musicgen|stable[_-]?audio[_-]?open/i.test(s))return {commercial:false,license:/YuE|yue2/i.test(s)?'CC-BY-NC-4.0':'비상업 조건 확인'};
+  if(/AceStep|ace_step|acestep/i.test(s))return {commercial:true,license:'Apache-2.0'};
+  return {commercial:null,license:''};
+}
+function buildMusicGraph(w,o){
+  if(!w||!w.json)throw new Error('음악 생성 워크플로우가 없습니다');
+  const g=JSON.parse(JSON.stringify(w.json)),m=w.map||{};
+  if(!m.tags)throw new Error('"곡 스타일" 매핑이 비어 있습니다');
+  setByPath(g,m.tags,o.tags);
+  if(m.lyrics)setByPath(g,m.lyrics,o.lyrics||'[Instrumental]');
+  ['seed','seed2'].forEach(k=>{if(m[k]&&o.seed!=null)setByPath(g,m[k],o.seed);});
+  ['duration','duration2'].forEach(k=>{if(m[k]&&o.seconds)setByPath(g,m[k],o.seconds);});
+  if(m.bpm&&o.bpm)setByPath(g,m.bpm,o.bpm);
+  if(m.key&&o.key)setByPath(g,m.key,o.key);
+  if(m.language&&o.language)setByPath(g,m.language,o.language);
+  if(m.prefix)setByPath(g,m.prefix,'occp/bgm');
+  return g;
+}
 
 function isUiFormat(json){
   return !!(json&&Array.isArray(json.nodes));
@@ -12071,7 +12207,7 @@ function buildWorkflowBlock(){
       nm.value=w.name||'';nm.placeholder='이름 (예: LTX I2V 480p)';
       nm.addEventListener('input',function(){w.name=nm.value;persistCfg();});
       const kind=document.createElement('select');
-      kind.innerHTML=[['i2v','이미지→영상'],['t2i','텍스트→이미지'],['tts','음성 합성'],['avatar','가상 강사']]
+      kind.innerHTML=[['i2v','이미지→영상'],['t2i','텍스트→이미지'],['tts','음성 합성'],['avatar','가상 강사'],['music','음악 생성']]
         .map(o=>'<option value="'+o[0]+'"'+(w.kind===o[0]?' selected':'')+'>'+o[1]+'</option>').join('');
       kind.addEventListener('change',function(){w.kind=kind.value;persistCfg();});
       const del=document.createElement('button');
@@ -12091,6 +12227,17 @@ function buildWorkflowBlock(){
       fps.addEventListener('input',function(){w.fps=parseInt(fps.value,10)||16;persistCfg();});
       fpsW.appendChild(fps);
       if(w.kind==='i2v')box.appendChild(fpsW);
+      if(w.kind==='music'){                              // 모델 이용 조건 (교육비를 받는 과정이면 상업 이용)
+        const lw=document.createElement('div');lw.className='field';
+        lw.innerHTML='<label>모델 이용 조건'+(w.license?' · '+esc(w.license):'')+'</label>';
+        const ls=document.createElement('select');
+        ls.innerHTML=[['1','상업 이용 가능 (교육비 받는 과정에 써도 됨)'],['0','비상업 전용 (CC BY-NC 등 — 유료 과정 금지)'],['','모름 — 모델 카드에서 확인 필요']]
+          .map(o=>'<option value="'+o[0]+'"'+(String(w.commercial===true?'1':w.commercial===false?'0':'')===o[0]?' selected':'')+'>'+o[1]+'</option>').join('');
+        ls.addEventListener('change',function(){w.commercial=ls.value===''?null:ls.value==='1';persistCfg();draw();});
+        lw.appendChild(ls);box.appendChild(lw);
+        if(w.commercial===false){const p=document.createElement('p');p.style.cssText='font-size:11.5px;color:var(--danger);margin:2px 0 6px;';
+          p.textContent='비상업 라이선스 모델입니다 — 교육비를 받는 과정의 배경음악으로 쓰면 라이선스 위반이 될 수 있습니다.';box.appendChild(p);}
+      }
 
       const slots=w.json?scanWorkflow(w.json):[];
       if(!slots.length){
@@ -12169,8 +12316,10 @@ function buildWorkflowBlock(){
     const hasTtsNode=slots.some(s=>/TTS/i.test(s.cls));
     const hasAudioIn=slots.some(s=>/\.(wav|mp3|flac|ogg|m4a)$/i.test(String(s.raw))||/LoadAudio/i.test(s.cls));
     const hasVideoIn=slots.some(s=>/\.(mp4|webm|mov|mkv|avi)$/i.test(String(s.raw))||/LoadVideo/i.test(s.cls));
-    const kind0=hasTtsNode?'tts':(hasAudioIn&&(hasImage||hasVideoIn))?'avatar':(hasImage?'i2v':'t2i');
-    const w={id:uid('w'),name:kind0==='avatar'?'가상 강사':'새 워크플로우',kind:kind0,fps:16,json:json,map:{}};
+    const hasMusic=slots.some(s=>/AceStep|YuE2|MusicGen|StableAudio|SongGen|DiffRhythm/i.test(s.cls));
+    const kind0=hasMusic?'music':hasTtsNode?'tts':(hasAudioIn&&(hasImage||hasVideoIn))?'avatar':(hasImage?'i2v':'t2i');
+    const w={id:uid('w'),name:kind0==='avatar'?'가상 강사':kind0==='music'?'음악 생성':'새 워크플로우',kind:kind0,fps:16,json:json,map:{}};
+    if(kind0==='music')Object.assign(w,musicLicenseGuess(json));
     const used=[];
     rolesFor(w.kind).forEach(function(r){
       const p=guessRole(r,slots,used);
