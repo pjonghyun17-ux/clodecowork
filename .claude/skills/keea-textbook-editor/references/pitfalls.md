@@ -1,6 +1,6 @@
 # 이미 밝혀진 함정과 고친 내용
 
-2026-10 검토에서 실제로 재현된 것들이다. 같은 꼴의 코드를 새로 쓸 때 다시 빠지지 않도록 '왜'를 함께 적는다. 1~9는 고쳤고 `scripts/regression.js` 가 지킨다. 8번(deep watch)은 아직 그대로다.
+2026-10 검토와 그 뒤 고친 것에서 실제로 재현된 것들이다. 같은 꼴의 코드를 새로 쓸 때 다시 빠지지 않도록 '왜'를 함께 적는다. 1~9·11은 고쳤고 `scripts/regression.js` 가 지킨다. 8번(deep watch)은 아직 그대로다.
 
 ## 1. IndexedDB 거래는 abort 도 받아야 한다
 저장 공간이 모자라면(QuotaExceededError) 요청은 성공한 뒤 **커밋 단계에서** 거래가 끝나므로 `error` 가 아니라 `abort` 만 온다. `oncomplete`/`onerror` 만 걸면 Promise 가 영영 안 끝나고, 자동저장이 멈췄는데 화면에는 '자동저장됨'이 남는다.
@@ -47,6 +47,19 @@
 - Playwright 에서 file:// 로 열면 IndexedDB 는 열 때마다 새 컨텍스트에 따로 생긴다 — 검사마다 `browser.newContext()` 로 깨끗하게 시작한다.
 - 고친 코드가 강사용 파일로 복제된다. 강사용에서만 도는 갈래(`IS_WRITER`)를 깨지 않았는지 본다.
 
+## 11. 그림은 브라우저가 그릴 수 있는 것만 넣는다 (TIFF 는 바꿔서)
+크롬·엣지·파이어폭스는 TIFF 를 그리지 못한다(사파리만 된다). 예전에는 `printQualityDataUrl` 이 실패(null)하면 `c || url` 로
+**원본을 그대로** 넣어, 깨진 그림 + 수 MB~수십 MB 의 TIFF 가 원고에 남았다(9.8MB CMYK TIFF → 12.5MB base64, 크기 0×0).
+→ 그림 파일은 모두 `fileToImageSrc(file, opt)` 로 받는다. 파일 머리(`II*\0`·`MM\0*`)로 TIFF 를 가려 작업자(Worker)에서
+`tiffDecodeRaw` 로 풀고 `tiffToDataUrl` 이 PNG(도식: 가장 흔한 색 30% 이상·256색 이하·투명)나 JPEG(사진)로 만든다. 긴 변 3600px.
+→ 그래도 못 여는 그림(팩스 G4 TIFF·HEIC·PSD…)은 **넣지 않고** 까닭을 `holdStatus` 로 몇 초 붙잡아 보인다
+(그냥 `saveStatus` 에 쓰면 곧이어 도는 자동저장의 '자동저장됨'이 1초 안에 덮는다).
+→ data 주소로 들어오는 길(한글 불러오기 `IMG_MIME`·`picSrc`, 보관함 꺼내기, 예전 원고 `optimizeExistingImages`)은
+`printQualityDataUrl`·`compressDataUrl` 의 TIFF 갈래가 받는다. 한글 문서 속 그림은 이름표를 믿을 수 없어 `isTiffDataUrl` 은 base64 머리도 본다.
+→ `tiffDecodeRaw` 는 바깥 이름을 쓰면 안 된다 — `toString()` 으로 떼어 작업자에서 돌린다. 고친 뒤에는 regression.js 의 TIFF 검사
+(assets/tiff 의 libtiff 시험 파일 17종과 기준 그림을 화소마다 견줌)가 `via: 'worker'` 까지 확인한다.
+→ CMYK 는 색 프로필 없이 단순 변환한다(도식은 차이가 거의 없고, 사진은 인쇄소 변환과 조금 다를 수 있다).
+
 ## 버그 찾기 점검표
 
 버그·최적화를 찾아 달라는 요청이면 이 차례로 본다. 위 1~8이 모두 이 갈래에서 나왔다.
@@ -58,5 +71,6 @@
 5. **변경 감지·캐시 열쇠**: 길이·개수로만 비교하는 곳, 그림을 길이로만 지문 내는 곳(`chapSig`).
 6. **비용**: 상태 전체 deep watch, 줄·칸마다 하는 `new RegExp`·`JSON.stringify`·`blockLoc` 같은 책 전체 훑기, 겹쳐 도는 비동기 조판.
 7. **내보내기**: CSV·XML 이스케이프 두 번/빠짐, IDML 의 Self id 중복, ICML 에 견본(색) 정의 빠짐.
+8. **그림 넣는 길**: 실패했을 때 `c || url` 처럼 원본을 그대로 넣는 곳, 새 입구가 `fileToImageSrc` 를 거치는지, 안내가 자동저장 문구에 덮이는지.
 
 찾은 것은 실제로 재현해 본다. setupState 로 함수를 불러 상태를 만들고 결과를 보면 대부분 1분 안에 확인된다. 재현한 것과 코드만 보고 추정한 것은 구분해서 알린다.

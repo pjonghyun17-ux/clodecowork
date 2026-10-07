@@ -1,5 +1,5 @@
 // 회귀 검사: node regression.js <html>
-// 2026-10 검토에서 고친 버그(references/pitfalls.md 1~9)가 다시 나지 않는지 본다.
+// 2026-10 검토에서 고친 버그(references/pitfalls.md 1~9)와 TIFF 변환(11)이 다시 깨지지 않는지 본다.
 // 고치기 전 파일에 돌리면 대부분 FAIL 이 나야 정상이다 — 그래야 이 검사가 무언가를 지킨다.
 // 새 버그를 고치면 같은 꼴로 블록 하나를 더한다: 새 컨텍스트로 열고 → setupState 로 상태를 만들고 → check().
 const { launch, openApp, SS } = require('./_pw');
@@ -165,6 +165,82 @@ if (!FILE) { console.error('쓰는 법: node regression.js <html>'); process.exi
     check('CSV 따옴표 한 번만 이스케이프', r.csv.includes('"그 ""견본"" 그림"'), r.csv);
     check('조판 중간 취소', r.cancelled && r.leftover === 0, r);
     check('조판 예외 때도 무대 정리', r.threw && r.leftover2 === 0, r);
+    await ctx.close(); }
+
+  // 10. TIFF: 넣을 때 PNG·JPEG 로 바꾼다 (assets/tiff — libtiff 로 만든 시험 파일과 기준 그림)
+  { const fs = require('fs'), path = require('path');
+    const dir = path.join(__dirname, '..', 'assets', 'tiff');
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.tif')).sort();
+    const { p, ctx } = await fresh();
+    let r;
+    try {
+      r = await p.evaluate(async (items) => {
+        const load = src => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; });
+        const px = im => { const c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight; const g = c.getContext('2d'); g.drawImage(im, 0, 0); return g.getImageData(0, 0, c.width, c.height).data; };
+        const out = [];
+        for (const it of items) {
+          const u = Uint8Array.from(atob(it.tif), c => c.charCodeAt(0));
+          try {
+            const o = await tiffToDataUrl(u);
+            const a = await load(o.url), rb = await load('data:image/png;base64,' + it.ref);
+            let maxd = -1;
+            if (a.naturalWidth === rb.naturalWidth && a.naturalHeight === rb.naturalHeight) { const A = px(a), R = px(rb); maxd = 0; for (let i = 0; i < A.length; i++) maxd = Math.max(maxd, Math.abs(A[i] - R[i])); }
+            out.push({ f: it.f, maxd, via: o.via, dims: a.naturalWidth + 'x' + a.naturalHeight });
+          } catch (e) { out.push({ f: it.f, err: e.message }); }
+        }
+        return out;
+      }, files.map(f => ({ f, tif: fs.readFileSync(path.join(dir, f)).toString('base64'), ref: fs.readFileSync(path.join(dir, 'ref', f.replace(/\.tif$/, '.png'))).toString('base64') })));
+    } catch (e) { r = [{ f: '(전체)', err: e.message.split('\n')[0] }]; }
+    const conv = r.filter(x => !/g4/.test(x.f));
+    const bad = conv.filter(x => x.err || x.maxd < 0 || x.maxd > (/jpeg/.test(x.f) ? 24 : 3));
+    check(`TIFF ${conv.length}종이 libtiff 기준 그림과 같게 바뀜`, conv.length >= 17 && !bad.length, bad.length ? bad : conv.length);
+    check('TIFF 변환은 작업자(백그라운드)에서', conv.length && conv.every(x => x.via === 'worker'), conv.map(x => x.via));
+    const g4 = r.find(x => /g4/.test(x.f));
+    check('팩스(G4) TIFF 는 까닭을 알리고 거절', g4 && /팩스/.test(g4.err || ''), g4);
+    await ctx.close(); }
+
+  // 11. TIFF: 실제 그림 넣는 길 — 그림 고르기 · 못 여는 형식 · 보관함 · 예전 원고 속 TIFF · 한글 불러오기 형식표
+  { const path = require('path'), fs = require('fs');
+    const dir = path.join(__dirname, '..', 'assets', 'tiff');
+    const { p, ctx } = await fresh();
+    let pick = path.join(dir, 'cmyk-lzw.tif');
+    p.on('filechooser', fc => fc.setFiles(pick));
+    const add = id => p.evaluate(({ SS, id }) => { const ss = eval(SS), st = window.__KEEA__.state, P = st.parts[0], C = P.chapters[0], S = C.sections[0];
+      S.blocks.push({ id, type: 'image', src: '', caption: id, width: 80, align: 'center', rot: 0 }); ss.selectSection(P.id, C.id, S.id); }, { SS, id });
+    const choose = id => p.evaluate(({ SS, id }) => { const ss = eval(SS), S = window.__KEEA__.state.parts[0].chapters[0].sections[0]; ss.chooseImage(S.blocks.find(x => x.id === id)); }, { SS, id });
+    const blockOf = id => p.evaluate(({ SS, id }) => { const ss = eval(SS), b = window.__KEEA__.state.parts[0].chapters[0].sections[0].blocks.find(x => x.id === id);
+      const el = document.querySelector('.block[data-bid="' + id + '"] img'); return { head: b.src.slice(0, 22), nw: b.nw, nh: b.nh, shown: el ? el.naturalWidth : -1, status: ss.saveStatus }; }, { SS, id });
+    await add('tifA'); await p.waitForTimeout(500); await choose('tifA'); await p.waitForTimeout(2500);
+    const a = await blockOf('tifA');
+    check('그림 고르기로 넣은 TIFF 가 PNG·JPEG 로 바뀌어 보임', /^data:image\/(png|jpeg)/.test(a.head) && a.nw === 40 && a.nh === 30 && a.shown === 40, a);
+    pick = path.join(dir, 'bilevel-g4.tif');
+    await add('tifB'); await p.waitForTimeout(500); await choose('tifB'); await p.waitForTimeout(2000);
+    const g = await blockOf('tifB');
+    check('못 여는 TIFF 는 넣지 않고 까닭을 알림', g.head === '' && /넣지 못했습니다/.test(g.status) && /팩스/.test(g.status), g);
+    let r2;
+    try {
+      r2 = await p.evaluate(async ({ SS, tif }) => {
+        const ss = eval(SS), st = window.__KEEA__.state;
+        const u = Uint8Array.from(atob(tif), c => c.charCodeAt(0));
+        // 보관함에 올리기
+        await ss.onImgLibFileChosen({ target: { files: [new File([u], '보관.tif', { type: 'image/tiff' })], value: '' } });
+        const ent = ss.imgLib.find(e => e.name === '보관');
+        const libSrc = ent ? String(await imgGet(ent.id)).slice(0, 22) : '';
+        // 고치기 전에 들어간 TIFF (그림 요소 · 표 칸 · 표지) → 열 때 정리
+        const durl = 'data:image/tiff;base64,' + tif;
+        const S = st.parts[0].chapters[0].sections[0];
+        S.blocks.push({ id: 'old1', type: 'image', src: durl, caption: '', width: 80, align: 'center', rot: 0 });
+        S.blocks.push({ id: 'old2', type: 'table', caption: '', headRow: false, rows: [[{ text: '', cs: 1, rs: 1, img: { src: durl, caption: '', width: 92, rot: 0 } }]] });
+        st.meta.coverImg = durl;
+        const changed = await optimizeExistingImages(st);
+        const b1 = S.blocks.find(x => x.id === 'old1'), b2 = S.blocks.find(x => x.id === 'old2').rows[0][0].img;
+        return { libSrc, changed, old1: b1.src.slice(0, 22) + ' ' + b1.nw + 'x' + b1.nh, old2: b2.src.slice(0, 22), cover: st.meta.coverImg.slice(0, 22),
+                 mime: IMG_MIME.tif, dims: imgDimsFromBytes(u) };
+      }, { SS, tif: fs.readFileSync(path.join(dir, 'rgb-lzw.tif')).toString('base64') });
+    } catch (e) { r2 = { err: e.message.split('\n')[0] }; }
+    check('그림 보관함에도 바뀐 그림으로 들어감', /^data:image\/(png|jpeg)/.test(r2.libSrc || ''), r2);
+    check('예전에 들어간 TIFF(그림·표 칸·표지)를 열 때 정리', r2.changed && /^data:image\/png.* 40x30$/.test(r2.old1 || '') && /^data:image\/png/.test(r2.old2 || '') && /^data:image\/png/.test(r2.cover || ''), r2);
+    check('한글 불러오기가 TIFF 그림을 받음(형식표·크기 읽기)', r2.mime === 'image/tiff' && r2.dims && r2.dims.w === 40 && r2.dims.h === 30, r2);
     await ctx.close(); }
 
   await b.close();

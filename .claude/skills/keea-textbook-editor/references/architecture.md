@@ -27,7 +27,7 @@
 | 5 | 인디자인 내보내기 | `IDML_TPL`(128KB 한 줄 틀 — 손대지 않음), `KEEA_IDML`, `KEEA_IDMLPKG` | 예 (틀 제외) |
 | 6 | 앱 본체 (약 1만 5천 줄) | `createApp({ setup(){…} })`, 끝에 `app.directive('editable')` | 예 |
 
-앱 본체 블록 6의 차례: 판 구분·암호(`KEEA_PKG`, `IS_WRITER`, `KEEA_CRYPT`, `SOURCE_HTML`) → 공용 함수(표 칸, 수식 표식, 캡션, 번호 단계) → 한글(.hwp/.hwpx) 읽기(`cfbOpen`, `hwpParseDoc`, `buildBookParts2` …) → 원고 검토 규칙(`SPELL_RULES`, `SPELL_MORE`, `ruleCheck`) → AI 연동(Claude API·LM Studio·ComfyUI) → 법령 검토 → IndexedDB·교재·버전·보관함 → 원고료 산정 → `createApp` setup (상태·번호·자동저장·편집기·미리보기·쪽 지도·인쇄·내보내기·강사 배포·폴더 백업·구글 드라이브) → `editable` 지시자.
+앱 본체 블록 6의 차례: 판 구분·암호(`KEEA_PKG`, `IS_WRITER`, `KEEA_CRYPT`, `SOURCE_HTML`) → 공용 함수(표 칸, 수식 표식, 캡션, 번호 단계) → 한글(.hwp/.hwpx) 읽기(`cfbOpen`, `hwpParseDoc`, `buildBookParts2` …) → 원고 검토 규칙(`SPELL_RULES`, `SPELL_MORE`, `ruleCheck`) → AI 연동(Claude API·LM Studio·ComfyUI) → 법령 검토 → IndexedDB·교재·버전·보관함 → 그림(이미지 압축·TIFF 해독·업스케일) → 원고료 산정 → `createApp` setup (상태·번호·자동저장·편집기·미리보기·쪽 지도·인쇄·내보내기·강사 배포·폴더 백업·구글 드라이브) → `editable` 지시자.
 
 ## 2. 자료 모델 (state)
 
@@ -119,7 +119,10 @@ localStorage: 옛 단일 원고(`keea_textbook_draft_v1`), 화면 설정(`keea_p
 | 맞춤법·규칙 검사 | `SPELL_RULES`, `SPELL_MORE`, `function ruleCheck`, `applyIssue` |
 | 찾기·바꾸기 | `function collectFields`, `fieldAccessor`, `scanField`, `replaceField`, `applyReplace` |
 | 미리보기·조판 | `async function pvRender`, `chapterUnits`, `bookUnits`, `typesetOpt`, `refreshBookMap`, `runPagination` |
-| 한글 불러오기 | `parseTextbookFile`, `hwpParseDoc`, `buildBookParts2`, `hwpxParseItems` |
+| 그림 넣기 (모든 입구) | `fileToImageSrc` (setup 안), `printQualityDataUrl`, `compressDataUrl`, `IMG_FAIL_WHY`, `holdStatus` |
+| TIFF → PNG·JPEG | `tiffDecodeRaw`(작업자에서 도는 해독기), `tiffToDataUrl`, `isTiffBytes`, `isTiffDataUrl`, `dataUrlBytes` |
+| 예전 원고 그림 정리 | `optimizeExistingImages` (열 때·교재 바꿀 때) |
+| 한글 불러오기 | `parseTextbookFile`, `hwpParseDoc`, `buildBookParts2`, `hwpxParseItems`, `IMG_MIME`, `imgDimsFromBytes` |
 | 인디자인 | `KEEA_IDML`, `partToItems`, `tableXml`, `KEEA_IDMLPKG.buildIdmlFiles` |
 | 강사 배포·제출 | `makeWriterFile`, `writerPkgState`, `onSubmitChosen`, `distLog` |
 | 원고료 | `FEE_DEFAULT`, `feeDiffSection` |

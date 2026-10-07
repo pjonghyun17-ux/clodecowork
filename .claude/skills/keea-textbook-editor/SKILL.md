@@ -41,6 +41,7 @@ python3 .claude/skills/keea-textbook-editor/scripts/patch_apply.py 교재원고�
 고칠 때 지킬 것:
 - 주석은 이 코드베이스처럼 **쉬운 우리말로 '왜'를** 적는다 (예: `// 저장 공간이 모자라면 거래는 error 가 아니라 abort 로 끝난다`).
 - 상태의 최상위 키를 새로 만들면 `defaultState()` 에도 넣는다 — 안 넣으면 교재를 바꿀 때 앞 교재 값이 남는다 (pitfalls 3).
+- 그림 파일을 받는 새 입구를 만들면 `fileToImageSrc` 를 거치게 한다. 못 여는 그림을 원본 그대로 넣지 않는다 (pitfalls 11).
 - 표 칸·번호 항목의 글을 바꿀 때는 `richAccessor` / `setRichHtml` 을 쓴다. `text` 만 바꾸면 꾸밈이 통째로 사라진다 (pitfalls 4).
 - 전체 상태에 `deep:true` watch 를 더 걸지 않는다. 지금 있는 것 하나만으로도 블록 5,600개 원고에서 한 번 고칠 때마다 약 200ms 가 든다 (pitfalls 8).
 - 강사용(IS_WRITER) 갈래도 같이 생각한다. 관리자 파일의 코드가 그대로 강사용 파일로 복제된다.
@@ -53,7 +54,7 @@ python3 .claude/skills/keea-textbook-editor/scripts/patch_apply.py 교재원고�
 S=.claude/skills/keea-textbook-editor/scripts
 python3 $S/split_check.py 교재원고작성기.html          # 문법 (모든 블록 node --check)
 node $S/smoke.js 교재원고작성기.html                   # 열 때 오류 없음 · 주요 전역 · 화면 뜸
-node $S/regression.js 교재원고작성기.html              # 지금까지 고친 버그 28가지가 다시 안 나는지
+node $S/regression.js 교재원고작성기.html              # 지금까지 고친 버그·TIFF 변환 36가지가 다시 안 나는지
 node $S/perf.js 교재원고작성기.html                    # 큰 가짜 원고에서 고침 지연·규칙 검사 시간
 ```
 
